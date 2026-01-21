@@ -5,7 +5,7 @@ import pyaudio
 import threading
 import time
 from vosk import Model, KaldiRecognizer
-from oop3 import SpotMicroController
+from oop import SpotMicroController
 
 MODEL_PATH = "/home/rpi/sr_model/vosk-model-small-ru-0.22/"  
 SAMPLE_RATE = 16000

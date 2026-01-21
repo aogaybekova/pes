@@ -17,6 +17,7 @@ import adafruit_pca9685
 import adafruit_mpu6050
 #import mpu6050 #import mpu6050
 from adafruit_servokit import ServoKit
+import RPi.GPIO as GPIO
 
 # SpotMicro-specific imports
 import Spotmicro_lib_020
@@ -119,11 +120,13 @@ class SpotMicroController:
         self.trans = 0
         self.tstop = 1000
         self.current_movement_command = "stop"
+        self.requested_movement_command = "stop"
         self.current_servo_angles = [0.0] * 12
         self.speed_smoothing = 0.3
         # Параметры стабилизации
         self.cg_stabilization_enabled = True
         self.imu_stabilization_enabled = True  # Добавляем отдельный флаг для IMU
+        self.pending_paw_command = None
 
         # Более консервативные параметры стабилизации
         self.max_cg_offset_x = 10  # Уменьшено с 15
@@ -170,6 +173,36 @@ class SpotMicroController:
         self.Angle_old = np.zeros(2)
         self.Integral_Angle = [0, 0]
 
+        # == Sensors (ultrasonic + touch)
+        self.sensors_enabled = False
+        self.left_distance = -1
+        self.right_distance = -1
+        self.last_sensor_poll = 0.0
+        self.sensor_poll_interval = 0.25
+        self.obstacle_threshold = 30.0
+        self.touch_pin = 17
+        self.touch_last_state = False
+        self.touch_debounce = 0.2
+        self.last_touch_time = 0.0
+        try:
+            GPIO.setwarnings(False)
+            GPIO.setmode(GPIO.BCM)
+            self.trig_left = 14
+            self.echo_left = 15
+            self.trig_right = 23
+            self.echo_right = 24
+            GPIO.setup(self.trig_left, GPIO.OUT)
+            GPIO.setup(self.echo_left, GPIO.IN)
+            GPIO.setup(self.trig_right, GPIO.OUT)
+            GPIO.setup(self.echo_right, GPIO.IN)
+            GPIO.setup(self.touch_pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+            GPIO.output(self.trig_left, False)
+            GPIO.output(self.trig_right, False)
+            sleep(0.1)
+            self.sensors_enabled = True
+        except Exception as e:
+            print(f"Sensor init error: {e}")
+
         # == Positions (body, legs)
         self.pos_init = [-self.x_offset, self.track4, -self.b_height, -self.x_offset, -self.track4, -self.b_height,
                          -self.x_offset, -self.track4, -self.b_height, -self.x_offset, self.track4, -self.b_height]
@@ -191,6 +224,82 @@ class SpotMicroController:
     def accept_command(self, command):
         with self.console_lock:
             self.command_queue.append(command)
+
+    def measure_distance(self, trig_pin, echo_pin):
+        GPIO.output(trig_pin, True)
+        sleep(0.00001)
+        GPIO.output(trig_pin, False)
+
+        start_time = time()
+        timeout = start_time + 0.04
+        while GPIO.input(echo_pin) == 0:
+            start_time = time()
+            if start_time > timeout:
+                return -1
+
+        stop_time = time()
+        timeout = stop_time + 0.04
+        while GPIO.input(echo_pin) == 1:
+            stop_time = time()
+            if stop_time > timeout:
+                return -1
+
+        elapsed_time = stop_time - start_time
+        return elapsed_time * 17150
+
+    def measure_filtered(self, trig_pin, echo_pin, samples=3):
+        readings = []
+        for _ in range(samples):
+            dist = self.measure_distance(trig_pin, echo_pin)
+            if 2.0 <= dist <= 400.0:
+                readings.append(dist)
+            sleep(0.01)
+        if readings:
+            return sum(readings) / len(readings)
+        return -1
+
+    def update_sensors(self):
+        if not self.sensors_enabled:
+            return
+        now = time()
+        if now - self.last_sensor_poll >= self.sensor_poll_interval:
+            self.left_distance = self.measure_filtered(self.trig_left, self.echo_left, samples=3)
+            self.right_distance = self.measure_filtered(self.trig_right, self.echo_right, samples=3)
+            self.last_sensor_poll = now
+
+        touch_state = not GPIO.input(self.touch_pin)
+        if touch_state and not self.touch_last_state and (now - self.last_touch_time) > self.touch_debounce:
+            self.handle_touch_event()
+            self.last_touch_time = now
+        self.touch_last_state = touch_state
+
+    def handle_touch_event(self):
+        if self.walking:
+            self.accept_command("stop_walk")
+            return
+        if self.sitting:
+            self.accept_command("paw_right")
+            return
+        self.pending_paw_command = "paw_right"
+        self.accept_command("sit")
+
+    def resolve_obstacle_avoidance(self):
+        if self.requested_movement_command != "forward":
+            self.current_movement_command = self.requested_movement_command
+            return
+
+        if self.left_distance < 0 or self.right_distance < 0:
+            self.current_movement_command = "forward"
+            return
+
+        if self.left_distance >= self.obstacle_threshold and self.right_distance >= self.obstacle_threshold:
+            self.current_movement_command = "forward"
+            return
+
+        if self.left_distance <= self.right_distance:
+            self.current_movement_command = "turn_left"
+        else:
+            self.current_movement_command = "turn_right"
 
     def start_console_thread(self):
         print('=== Console thread started ===')
@@ -252,34 +361,34 @@ class SpotMicroController:
 
                 elif command == "forward":
                     ensure_walking_mode()
-                    self.current_movement_command = "forward"
+                    self.requested_movement_command = "forward"
                     self.target_speed = 100
                     self.current_action = "Moving forward"
 
                 elif command == "backward":
                     ensure_walking_mode()
-                    self.current_movement_command = "backward"
+                    self.requested_movement_command = "backward"
                     self.target_speed = 100
                     self.current_action = "Moving backward"
 
                 elif command == "left":
                     ensure_walking_mode()
-                    self.current_movement_command = "left"
+                    self.requested_movement_command = "left"
                     self.current_action = "Moving left"
 
                 elif command == "right":
                     ensure_walking_mode()
-                    self.current_movement_command = "right"
+                    self.requested_movement_command = "right"
                     self.current_action = "Moving right"
 
                 elif command == "turn_left":
                     ensure_walking_mode()
-                    self.current_movement_command = "turn_left"
+                    self.requested_movement_command = "turn_left"
                     self.current_action = "Turning left"
 
                 elif command == "turn_right":
                     ensure_walking_mode()
-                    self.current_movement_command = "turn_right"
+                    self.requested_movement_command = "turn_right"
                     self.current_action = "Turning right"
 
                 elif command == "stop_walk":
@@ -287,6 +396,7 @@ class SpotMicroController:
                         self.stop = True
                         self.lock = True
                         self.tstop = int(self.t)
+                        self.requested_movement_command = "stop"
                         self.current_movement_command = "stop"
                         self.current_action = "Stopping walk..."
                         print("=== STOPPING WALK SEQUENCE INITIATED ===")
@@ -303,6 +413,7 @@ class SpotMicroController:
                     elif not self.walking and self.Free:
                         # ????? ?????????????????, ???? ?????? "????????" ????? ??????:
                         # ensure_walking_mode()
+                        self.requested_movement_command = "stop"
                         self.current_movement_command = "stop"
 
                 elif command == "stab_test":
@@ -347,6 +458,7 @@ class SpotMicroController:
                     self.stop = False
                     self.Free = True
                     self.walking_speed = 0.0
+                    self.requested_movement_command = "stop"
                     self.current_movement_command = "stop"
                     self.joypal = -1
                     self.joypar = -1
@@ -498,6 +610,7 @@ class SpotMicroController:
         print("Starting main loop... Use console to control the robot.")
         while self.continuer:
             self.clock.tick(60) #self.clock.tick(30)
+            self.update_sensors()
 
             if not hasattr(self, 'frame_counter'):
                 self.frame_counter = 0
@@ -558,6 +671,8 @@ class SpotMicroController:
             if self.walking:
                 self.t = self.t + self.tstep
                 self.trec = int(self.t) + 1
+
+                self.resolve_obstacle_avoidance()
 
                 # Process movement commands
                 self.DIR_FORWARD = pi / 2
@@ -731,6 +846,9 @@ class SpotMicroController:
                         self.joypar = -1
                         self.current_action = "Standing completed"
                         print("=== STANDING COMPLETED ===")
+                        if self.pending_paw_command:
+                            self.accept_command(self.pending_paw_command)
+                            self.pending_paw_command = None
                 else:
                     if self.t < 1:
                         # Sitting down - go from standing to sitting position
@@ -1028,6 +1146,11 @@ class SpotMicroController:
             self.pos[15][7] = self.CGabs[2]
 
         print("Shutting down...")
+        try:
+            if self.sensors_enabled:
+                GPIO.cleanup()
+        except Exception as e:
+            print(f"GPIO cleanup error: {e}")
         pygame.quit()
 
     # ==================== HARDWARE HELPERS ====================
