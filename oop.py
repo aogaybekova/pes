@@ -326,9 +326,11 @@ class SpotMicroController:
                 self.app_client = None
                 return
             payload = data.decode("utf-8", errors="replace")
+            if len(payload) > 2048:
+                payload = payload[:2048]
             commands = [cmd.strip().lower() for cmd in payload.replace("\r", "\n").split("\n") if cmd.strip()]
             for command in commands:
-                if command:
+                if command and len(command) <= 64:
                     self.accept_command(command)
         except BlockingIOError:
             return
@@ -394,12 +396,14 @@ class SpotMicroController:
             if photo_path is None:
                 photo_path = os.path.join(os.getcwd(), PHOTO_FILENAME_TEMPLATE.format(timestamp=int(time())))
             picam2 = Picamera2()
-            config = picam2.create_preview_configuration(main={"format": "RGB888", "size": (640, 480)})
-            picam2.configure(config)
-            picam2.start()
-            sleep(0.2)
-            frame = picam2.capture_array()
-            picam2.stop()
+            try:
+                config = picam2.create_preview_configuration(main={"format": "RGB888", "size": (640, 480)})
+                picam2.configure(config)
+                picam2.start()
+                sleep(0.2)
+                frame = picam2.capture_array()
+            finally:
+                picam2.stop()
             if cv2 is None:
                 print("OpenCV not available for saving photo.")
                 return None
