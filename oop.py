@@ -232,8 +232,7 @@ class SpotMicroController:
         sleep(0.00001)
         GPIO.output(trig_pin, False)
 
-        start_time = time()
-        timeout = start_time + 0.04
+        timeout = time() + 0.04
         while GPIO.input(echo_pin) == 0:
             if time() > timeout:
                 return -1
@@ -309,9 +308,9 @@ class SpotMicroController:
             return
 
         if left_distance <= right_distance:
-            self.current_movement_command = "turn_left"
-        else:
             self.current_movement_command = "turn_right"
+        else:
+            self.current_movement_command = "turn_left"
 
     def start_console_thread(self):
         print('=== Console thread started ===')
