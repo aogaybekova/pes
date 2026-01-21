@@ -9,13 +9,14 @@ app = Flask(__name__)
 # Configuration
 ROBOT_HOST = 'localhost'
 ROBOT_PORT = 5055
+SOCKET_TIMEOUT = 2  # seconds
 
 def send_command_to_robot(command):
     """Send a command to the robot via socket connection."""
     try:
         # Create a socket connection
         client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        client.settimeout(2)  # 2 second timeout
+        client.settimeout(SOCKET_TIMEOUT)
         
         # Connect to robot
         client.connect((ROBOT_HOST, ROBOT_PORT))

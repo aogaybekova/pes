@@ -248,6 +248,9 @@ class SpotMicroController:
             self.socket_server = None
         
         self.client_socket = None
+        
+        # == Obstacle avoidance state ==
+        self.avoiding_obstacle = False
 
         # == Positions (body, legs)
         self.pos_init = [-self.x_offset, self.track4, -self.b_height, -self.x_offset, -self.track4, -self.b_height,
@@ -588,13 +591,13 @@ class SpotMicroController:
             sleep(0.00001)
             GPIO.output(self.LEFT_TRIG, False)
             
-            pulse_start = time()
-            timeout = pulse_start + 0.1  # 100ms timeout
+            pulse_start_time = time()
+            timeout = pulse_start_time + 0.1  # 100ms timeout
             while GPIO.input(self.LEFT_ECHO) == 0 and time() < timeout:
                 pulse_start = time()
             
             pulse_end = time()
-            timeout = pulse_end + 0.1
+            timeout = pulse_start_time + 0.2  # Extended timeout for pulse end
             while GPIO.input(self.LEFT_ECHO) == 1 and time() < timeout:
                 pulse_end = time()
             
@@ -613,13 +616,13 @@ class SpotMicroController:
             sleep(0.00001)
             GPIO.output(self.RIGHT_TRIG, False)
             
-            pulse_start = time()
-            timeout = pulse_start + 0.1
+            pulse_start_time = time()
+            timeout = pulse_start_time + 0.1
             while GPIO.input(self.RIGHT_ECHO) == 0 and time() < timeout:
                 pulse_start = time()
             
             pulse_end = time()
-            timeout = pulse_end + 0.1
+            timeout = pulse_start_time + 0.2
             while GPIO.input(self.RIGHT_ECHO) == 1 and time() < timeout:
                 pulse_end = time()
             
@@ -848,19 +851,17 @@ class SpotMicroController:
                             # More space on left, turn left
                             print(f"Obstacle ahead! Turning left (L:{self.left_ultrasonic_distance}cm, R:{self.right_ultrasonic_distance}cm)")
                             self.current_movement_command = "turn_left"
+                            self.avoiding_obstacle = True
                         else:
                             # More space on right, turn right
                             print(f"Obstacle ahead! Turning right (L:{self.left_ultrasonic_distance}cm, R:{self.right_ultrasonic_distance}cm)")
                             self.current_movement_command = "turn_right"
-                    elif hasattr(self, 'avoiding_obstacle') and self.avoiding_obstacle:
+                            self.avoiding_obstacle = True
+                    elif self.avoiding_obstacle:
                         # Path is clear again, resume forward
                         print("Path clear, resuming forward")
                         self.avoiding_obstacle = False
                         self.current_movement_command = "forward"
-                
-                # Track if we're avoiding obstacle
-                if self.current_movement_command in ["turn_left", "turn_right"] and not hasattr(self, 'avoiding_obstacle'):
-                    self.avoiding_obstacle = True
 
                 if self.current_movement_command == "forward":
                     #self.walking_speed = 100  # 0.5
