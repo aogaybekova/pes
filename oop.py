@@ -254,7 +254,7 @@ class SpotMicroController:
         try:
             self.app_server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.app_server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            self.app_server.bind(("0.0.0.0", self.app_port))
+            self.app_server.bind(("127.0.0.1", self.app_port))
             self.app_server.listen(1)
             self.app_server.setblocking(False)
         except Exception as e:
