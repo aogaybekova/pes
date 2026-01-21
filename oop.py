@@ -247,11 +247,11 @@ class SpotMicroController:
                 self.camera = None
         
         # Create photos directory
-        self.photos_dir = "/home/runner/work/pes/pes/photos"
+        self.photos_dir = os.path.join(os.path.dirname(__file__), "photos")
         os.makedirs(self.photos_dir, exist_ok=True)
         
         # == RL Environment Logging ==
-        self.log_file = "/home/runner/work/pes/pes/rl_environment_log.csv"
+        self.log_file = os.path.join(os.path.dirname(__file__), "rl_environment_log.csv")
         self.init_logging()
         
         # == TCP Server for App Control ==
@@ -285,23 +285,25 @@ class SpotMicroController:
             sleep(0.00001)
             GPIO.output(trig_pin, False)
             
-            start_time = time()
-            timeout = start_time + 0.04
+            # Wait for echo to go high
+            timeout_start = time() + 0.04
+            pulse_start = time()
             
             while GPIO.input(echo_pin) == 0:
-                start_time = time()
-                if start_time > timeout:
+                pulse_start = time()
+                if pulse_start > timeout_start:
                     return -1
             
-            stop_time = time()
-            timeout = stop_time + 0.04
+            # Wait for echo to go low
+            timeout_end = time() + 0.04
+            pulse_end = time()
             
             while GPIO.input(echo_pin) == 1:
-                stop_time = time()
-                if stop_time > timeout:
+                pulse_end = time()
+                if pulse_end > timeout_end:
                     return -1
             
-            elapsed_time = stop_time - start_time
+            elapsed_time = pulse_end - pulse_start
             distance_cm = elapsed_time * 17150
             
             # Filter valid range
@@ -319,16 +321,16 @@ class SpotMicroController:
         sleep(0.01)  # Small delay between sensors
         self.last_right_distance = self.measure_distance(self.TRIG_RIGHT, self.ECHO_RIGHT)
         
-        # Read touch sensor
+        # Read touch sensor (with pull-up: LOW=touched, HIGH=not touched)
         touch_state = GPIO.input(self.TOUCH_PIN)
         current_time = time()
         
-        # Detect touch event (transition to touched)
-        if touch_state == 1 and not self.touch_detected:
+        # Detect touch event (transition to touched - LOW with pull-up)
+        if touch_state == 0 and not self.touch_detected:
             self.touch_detected = True
             self.last_touch_time = current_time
             self.handle_touch_event()
-        elif touch_state == 0:
+        elif touch_state == 1:
             self.touch_detected = False
     
     def handle_obstacle_avoidance(self):
@@ -476,13 +478,20 @@ class SpotMicroController:
     # ==================== TCP SERVER METHODS ====================
     
     def start_tcp_server(self):
-        """Start TCP server for app control"""
+        """Start TCP server for app control
+        
+        Note: Binds to 0.0.0.0 to allow mobile app connections.
+        WARNING: This exposes the server to all network interfaces.
+        Use only on trusted networks or implement authentication if needed.
+        """
         if not self.tcp_enabled:
             return
         
         try:
             self.tcp_server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.tcp_server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            # Bind to all interfaces for mobile app access
+            # Change to '127.0.0.1' for local-only access if security is a concern
             self.tcp_server_socket.bind(('0.0.0.0', self.tcp_port))
             self.tcp_server_socket.listen(5)
             self.tcp_server_socket.settimeout(1.0)  # Non-blocking accept
