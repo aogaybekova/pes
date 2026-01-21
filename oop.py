@@ -233,18 +233,17 @@ class SpotMicroController:
         start_time = time()
         timeout = start_time + 0.04
         while GPIO.input(echo_pin) == 0:
-            start_time = time()
-            if start_time > timeout:
+            if time() > timeout:
                 return -1
 
-        stop_time = time()
-        timeout = stop_time + 0.04
+        pulse_start = time()
+        timeout = pulse_start + 0.04
         while GPIO.input(echo_pin) == 1:
-            stop_time = time()
-            if stop_time > timeout:
+            if time() > timeout:
                 return -1
 
-        elapsed_time = stop_time - start_time
+        pulse_end = time()
+        elapsed_time = pulse_end - pulse_start
         return elapsed_time * 17150
 
     def measure_filtered(self, trig_pin, echo_pin, samples=3):
@@ -253,7 +252,6 @@ class SpotMicroController:
             dist = self.measure_distance(trig_pin, echo_pin)
             if 2.0 <= dist <= 400.0:
                 readings.append(dist)
-            sleep(0.01)
         if readings:
             return sum(readings) / len(readings)
         return -1
@@ -297,9 +295,9 @@ class SpotMicroController:
             return
 
         if self.left_distance <= self.right_distance:
-            self.current_movement_command = "turn_left"
-        else:
             self.current_movement_command = "turn_right"
+        else:
+            self.current_movement_command = "turn_left"
 
     def start_console_thread(self):
         print('=== Console thread started ===')
