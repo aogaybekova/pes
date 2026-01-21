@@ -20,6 +20,10 @@ from adafruit_servokit import ServoKit
 import RPi.GPIO as GPIO
 import socket
 import csv
+try:
+    import cv2
+except Exception:
+    cv2 = None
 
 # SpotMicro-specific imports
 import Spotmicro_lib_020
@@ -189,7 +193,7 @@ class SpotMicroController:
         self.last_valid_left = -1
         self.last_valid_right = -1
         self.environment_logging_enabled = True
-        self.log_path = "/home/runner/work/pes/pes/rl_environment_log.csv"
+        self.log_path = os.path.join(os.getcwd(), "rl_environment_log.csv")
         self.log_interval = 0.2
         self.last_log_time = 0.0
         self.log_fields = [
@@ -210,7 +214,6 @@ class SpotMicroController:
         self.app_port = 5055
         self.app_server = None
         self.app_client = None
-        self.app_lock = threading.Lock()
         try:
             GPIO.setwarnings(False)
             GPIO.setmode(GPIO.BCM)
@@ -385,7 +388,7 @@ class SpotMicroController:
             return None
         try:
             if photo_path is None:
-                photo_path = f"/home/runner/work/pes/pes/capture_{int(time())}.jpg"
+                photo_path = os.path.join(os.getcwd(), f"capture_{int(time())}.jpg")
             picam2 = Picamera2()
             config = picam2.create_preview_configuration(main={"format": "RGB888", "size": (640, 480)})
             picam2.configure(config)
@@ -393,9 +396,12 @@ class SpotMicroController:
             sleep(0.2)
             frame = picam2.capture_array()
             picam2.stop()
+            if cv2 is None:
+                print("OpenCV not available for saving photo.")
+                return None
             try:
-                import cv2
-                cv2.imwrite(photo_path, frame)
+                bgr_frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                cv2.imwrite(photo_path, bgr_frame)
             except Exception as e:
                 print(f"OpenCV save error: {e}")
                 return None
