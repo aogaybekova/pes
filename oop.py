@@ -23,7 +23,7 @@ import csv
 LOG_FILENAME = "rl_environment_log.csv"
 PHOTO_FILENAME_TEMPLATE = "capture_{timestamp}.jpg"
 MAX_COMMAND_LENGTH = 64
-MAX_PAYLOAD_LENGTH = 1024
+MAX_RECV_BUFFER_SIZE = 1024
 try:
     import cv2
 except ImportError:
@@ -295,8 +295,8 @@ class SpotMicroController:
                 "left_distance_cm": self.left_distance,
                 "right_distance_cm": self.right_distance,
                 "touch_active": self.touch_last_state,
-                "imu_roll": float(self.Angle[0]) if hasattr(self, "Angle") else 0.0,
-                "imu_pitch": float(self.Angle[1]) if hasattr(self, "Angle") else 0.0,
+                "imu_roll": float(self.Angle[0]),
+                "imu_pitch": float(self.Angle[1]),
                 "command": self.current_movement_command,
                 "walking": self.walking,
                 "sitting": self.sitting,
@@ -322,14 +322,12 @@ class SpotMicroController:
             return
 
         try:
-            data = self.app_client.recv(MAX_PAYLOAD_LENGTH)
+            data = self.app_client.recv(MAX_RECV_BUFFER_SIZE)
             if not data:
                 self.app_client.close()
                 self.app_client = None
                 return
             payload = data.decode("utf-8", errors="replace")
-            if len(payload) > MAX_PAYLOAD_LENGTH:
-                payload = payload[:MAX_PAYLOAD_LENGTH]
             commands = [cmd.strip().lower() for cmd in payload.replace("\r", "\n").split("\n") if cmd.strip()]
             for command in commands:
                 if command and len(command) <= MAX_COMMAND_LENGTH:
