@@ -857,9 +857,6 @@ class SpotMicroController:
                         self.joypar = -1
                         self.current_action = "Standing completed"
                         print("=== STANDING COMPLETED ===")
-                        if self.pending_paw_command:
-                            self.accept_command(self.pending_paw_command)
-                            self.pending_paw_command = None
                 else:
                     if self.t < 1:
                         # Sitting down - go from standing to sitting position
@@ -869,6 +866,9 @@ class SpotMicroController:
                             self.t = 1
                             self.Free = True
                             self.lock = False
+                            if self.pending_paw_command:
+                                self.accept_command(self.pending_paw_command)
+                                self.pending_paw_command = None
                     elif self.t == 1 and self.pawing:
                         L_paw = 2000  #
                         alpha_pawing = -30/90*pi  #
