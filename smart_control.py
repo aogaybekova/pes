@@ -215,10 +215,14 @@ class SmartRobotController:
         "выход": "quit",
     }
     
-    # Настройки голосового распознавания
-    MODEL_PATH = "/home/rpi/sr_model/vosk-model-small-ru-0.22/"
+    # Настройки голосового распознавания (можно переопределить через переменные окружения)
+    MODEL_PATH = os.environ.get("VOSK_MODEL_PATH", "/home/rpi/sr_model/vosk-model-small-ru-0.22/")
     SAMPLE_RATE = 16000
     CHUNK_SIZE = 4096
+    
+    # Настройки таймингов (в секундах)
+    SIT_COMMAND_DELAY = float(os.environ.get("SIT_COMMAND_DELAY", "2.0"))
+    TOUCH_DEBOUNCE_TIME = float(os.environ.get("TOUCH_DEBOUNCE_TIME", "1.0"))
     
     def __init__(self, use_robot=True, use_voice=True, log_rl_data=True):
         """
@@ -333,7 +337,7 @@ class SmartRobotController:
         elif self.robot_state == "standing":
             print("[SmartController] Робот стоит -> Сесть и дать лапу")
             self.send_command("sit")
-            time.sleep(2)  # Ждем пока сядет
+            time.sleep(self.SIT_COMMAND_DELAY)  # Ждем пока сядет
             self.send_command("paw_right")
         elif self.robot_state == "sitting":
             print("[SmartController] Робот сидит -> Дать лапу")
@@ -448,13 +452,12 @@ class SmartRobotController:
         print("[SmartController] Мониторинг датчиков запущен")
         
         last_touch_time = 0
-        touch_debounce = 1.0  # Задержка между обработками касания
         
         while self.running:
             try:
                 # Проверяем датчик касания
                 current_time = time.time()
-                if current_time - last_touch_time > touch_debounce:
+                if current_time - last_touch_time > self.TOUCH_DEBOUNCE_TIME:
                     if self.sensors.get_touch():
                         self.handle_touch_sensor()
                         last_touch_time = current_time

@@ -743,11 +743,14 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
 
 
 def create_template():
-    """Создает HTML шаблон"""
+    """Создает HTML шаблон только если он не существует"""
     template_path = os.path.join('templates', 'index.html')
-    with open(template_path, 'w', encoding='utf-8') as f:
-        f.write(HTML_TEMPLATE)
-    print(f"[WebApp] Шаблон создан: {template_path}")
+    if not os.path.exists(template_path):
+        with open(template_path, 'w', encoding='utf-8') as f:
+            f.write(HTML_TEMPLATE)
+        print(f"[WebApp] Шаблон создан: {template_path}")
+    else:
+        print(f"[WebApp] Шаблон существует: {template_path}")
 
 
 def start_robot_controller():
