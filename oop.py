@@ -18,6 +18,8 @@ import adafruit_mpu6050
 #import mpu6050 #import mpu6050
 from adafruit_servokit import ServoKit
 import RPi.GPIO as GPIO
+import socket
+import csv
 
 # SpotMicro-specific imports
 import Spotmicro_lib_020
@@ -186,6 +188,29 @@ class SpotMicroController:
         self.last_touch_time = 0.0
         self.last_valid_left = -1
         self.last_valid_right = -1
+        self.environment_logging_enabled = True
+        self.log_path = "/home/runner/work/pes/pes/rl_environment_log.csv"
+        self.log_interval = 0.2
+        self.last_log_time = 0.0
+        self.log_fields = [
+            "timestamp",
+            "left_distance_cm",
+            "right_distance_cm",
+            "touch_active",
+            "imu_roll",
+            "imu_pitch",
+            "command",
+            "walking",
+            "sitting",
+            "lying",
+            "action",
+        ]
+        self.log_file = None
+        self.log_writer = None
+        self.app_port = 5055
+        self.app_server = None
+        self.app_client = None
+        self.app_lock = threading.Lock()
         try:
             GPIO.setwarnings(False)
             GPIO.setmode(GPIO.BCM)
@@ -204,6 +229,25 @@ class SpotMicroController:
             self.sensors_enabled = True
         except Exception as e:
             print(f"Sensor init error: {e}")
+
+        if self.environment_logging_enabled:
+            try:
+                self.log_file = open(self.log_path, "a", newline="")
+                self.log_writer = csv.DictWriter(self.log_file, fieldnames=self.log_fields)
+                if self.log_file.tell() == 0:
+                    self.log_writer.writeheader()
+            except Exception as e:
+                print(f"Log init error: {e}")
+                self.environment_logging_enabled = False
+
+        try:
+            self.app_server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.app_server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self.app_server.bind(("0.0.0.0", self.app_port))
+            self.app_server.listen(1)
+            self.app_server.setblocking(False)
+        except Exception as e:
+            print(f"App server init error: {e}")
 
         # == Positions (body, legs)
         self.pos_init = [-self.x_offset, self.track4, -self.b_height, -self.x_offset, -self.track4, -self.b_height,
@@ -226,6 +270,61 @@ class SpotMicroController:
     def accept_command(self, command):
         with self.console_lock:
             self.command_queue.append(command)
+
+    def update_environment_log(self):
+        if not self.environment_logging_enabled or not self.log_writer:
+            return
+        now = time()
+        if now - self.last_log_time < self.log_interval:
+            return
+        self.last_log_time = now
+        try:
+            self.log_writer.writerow({
+                "timestamp": now,
+                "left_distance_cm": self.left_distance,
+                "right_distance_cm": self.right_distance,
+                "touch_active": self.touch_last_state,
+                "imu_roll": float(self.Angle[0]) if hasattr(self, "Angle") else 0.0,
+                "imu_pitch": float(self.Angle[1]) if hasattr(self, "Angle") else 0.0,
+                "command": self.current_movement_command,
+                "walking": self.walking,
+                "sitting": self.sitting,
+                "lying": self.lying,
+                "action": self.current_action,
+            })
+            self.log_file.flush()
+        except Exception as e:
+            print(f"Log write error: {e}")
+
+    def poll_app_commands(self):
+        if not self.app_server:
+            return
+        try:
+            if not self.app_client:
+                self.app_client, _ = self.app_server.accept()
+                self.app_client.setblocking(False)
+                return
+        except BlockingIOError:
+            return
+        except Exception as e:
+            print(f"App accept error: {e}")
+            return
+
+        try:
+            data = self.app_client.recv(1024)
+            if not data:
+                self.app_client.close()
+                self.app_client = None
+                return
+            payload = data.decode("utf-8", errors="ignore")
+            commands = [cmd.strip().lower() for cmd in payload.replace("\r", "\n").split("\n") if cmd.strip()]
+            for command in commands:
+                if command:
+                    self.accept_command(command)
+        except BlockingIOError:
+            return
+        except Exception as e:
+            print(f"App recv error: {e}")
 
     def measure_distance(self, trig_pin, echo_pin):
         GPIO.output(trig_pin, True)
@@ -277,6 +376,33 @@ class SpotMicroController:
             self.handle_touch_event()
             self.last_touch_time = now
         self.touch_last_state = touch_state
+
+    def capture_photo(self, photo_path=None):
+        try:
+            from picamera2 import Picamera2
+        except Exception as e:
+            print(f"Camera import error: {e}")
+            return None
+        try:
+            if photo_path is None:
+                photo_path = f"/home/runner/work/pes/pes/capture_{int(time())}.jpg"
+            picam2 = Picamera2()
+            config = picam2.create_preview_configuration(main={"format": "RGB888", "size": (640, 480)})
+            picam2.configure(config)
+            picam2.start()
+            sleep(0.2)
+            frame = picam2.capture_array()
+            picam2.stop()
+            try:
+                import cv2
+                cv2.imwrite(photo_path, frame)
+            except Exception as e:
+                print(f"OpenCV save error: {e}")
+                return None
+            return photo_path
+        except Exception as e:
+            print(f"Camera capture error: {e}")
+            return None
 
     def handle_touch_event(self):
         if self.walking:
@@ -608,6 +734,11 @@ class SpotMicroController:
                     state = "ON" if self.IMU_Comp else "OFF"
                     print(f"IMU compensation: {state}")
                     self.current_action = f"IMU compensation {state}"
+                elif command == "photo":
+                    photo_path = self.capture_photo()
+                    if photo_path:
+                        print(f"Photo saved: {photo_path}")
+                        self.current_action = f"Photo saved: {photo_path}"
 
                 else:
                     print(f"Unknown command: {command}")
@@ -621,6 +752,7 @@ class SpotMicroController:
         print("Starting main loop... Use console to control the robot.")
         while self.continuer:
             self.clock.tick(60) #self.clock.tick(30)
+            self.poll_app_commands()
             self.update_sensors()
 
             if not hasattr(self, 'frame_counter'):
@@ -1156,9 +1288,17 @@ class SpotMicroController:
             self.pos[14][7] = self.CGabs[1]
             self.pos[15][7] = self.CGabs[2]
 
+            self.update_environment_log()
+
         print("Shutting down...")
         try:
             GPIO.cleanup()
+            if self.app_client:
+                self.app_client.close()
+            if self.app_server:
+                self.app_server.close()
+            if self.log_file:
+                self.log_file.close()
         except Exception as e:
             print(f"GPIO cleanup error: {e}")
         pygame.quit()
