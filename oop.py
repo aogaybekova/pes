@@ -20,10 +20,16 @@ from adafruit_servokit import ServoKit
 import RPi.GPIO as GPIO
 import socket
 import csv
+LOG_FILENAME = "rl_environment_log.csv"
+PHOTO_FILENAME_TEMPLATE = "capture_{timestamp}.jpg"
 try:
     import cv2
-except Exception:
+except ImportError:
     cv2 = None
+try:
+    from picamera2 import Picamera2
+except ImportError:
+    Picamera2 = None
 
 # SpotMicro-specific imports
 import Spotmicro_lib_020
@@ -193,7 +199,7 @@ class SpotMicroController:
         self.last_valid_left = -1
         self.last_valid_right = -1
         self.environment_logging_enabled = True
-        self.log_path = os.path.join(os.getcwd(), "rl_environment_log.csv")
+        self.log_path = os.path.join(os.getcwd(), LOG_FILENAME)
         self.log_interval = 0.2
         self.last_log_time = 0.0
         self.log_fields = [
@@ -319,7 +325,7 @@ class SpotMicroController:
                 self.app_client.close()
                 self.app_client = None
                 return
-            payload = data.decode("utf-8", errors="ignore")
+            payload = data.decode("utf-8", errors="replace")
             commands = [cmd.strip().lower() for cmd in payload.replace("\r", "\n").split("\n") if cmd.strip()]
             for command in commands:
                 if command:
@@ -381,14 +387,12 @@ class SpotMicroController:
         self.touch_last_state = touch_state
 
     def capture_photo(self, photo_path=None):
-        try:
-            from picamera2 import Picamera2
-        except Exception as e:
-            print(f"Camera import error: {e}")
+        if Picamera2 is None:
+            print("Camera library not available.")
             return None
         try:
             if photo_path is None:
-                photo_path = os.path.join(os.getcwd(), f"capture_{int(time())}.jpg")
+                photo_path = os.path.join(os.getcwd(), PHOTO_FILENAME_TEMPLATE.format(timestamp=int(time())))
             picam2 = Picamera2()
             config = picam2.create_preview_configuration(main={"format": "RGB888", "size": (640, 480)})
             picam2.configure(config)
