@@ -184,6 +184,8 @@ class SpotMicroController:
         self.touch_last_state = False
         self.touch_debounce = 0.2
         self.last_touch_time = 0.0
+        self.last_valid_left = -1
+        self.last_valid_right = -1
         try:
             GPIO.setwarnings(False)
             GPIO.setmode(GPIO.BCM)
@@ -235,12 +237,14 @@ class SpotMicroController:
         while GPIO.input(echo_pin) == 0:
             if time() > timeout:
                 return -1
+            sleep(0.00001)
 
         pulse_start = time()
         timeout = pulse_start + 0.04
         while GPIO.input(echo_pin) == 1:
             if time() > timeout:
                 return -1
+            sleep(0.00001)
 
         pulse_end = time()
         elapsed_time = pulse_end - pulse_start
@@ -263,6 +267,10 @@ class SpotMicroController:
         if now - self.last_sensor_poll >= self.sensor_poll_interval:
             self.left_distance = self.measure_filtered(self.trig_left, self.echo_left, samples=3)
             self.right_distance = self.measure_filtered(self.trig_right, self.echo_right, samples=3)
+            if self.left_distance >= 0:
+                self.last_valid_left = self.left_distance
+            if self.right_distance >= 0:
+                self.last_valid_right = self.right_distance
             self.last_sensor_poll = now
 
         touch_state = not GPIO.input(self.touch_pin)
@@ -286,18 +294,24 @@ class SpotMicroController:
             self.current_movement_command = self.requested_movement_command
             return
 
-        if self.left_distance < 0 or self.right_distance < 0:
+        left_distance = self.left_distance
+        right_distance = self.right_distance
+        if left_distance < 0:
+            left_distance = self.last_valid_left
+        if right_distance < 0:
+            right_distance = self.last_valid_right
+        if left_distance < 0 or right_distance < 0:
+            self.current_movement_command = "stop"
+            return
+
+        if left_distance >= self.obstacle_threshold and right_distance >= self.obstacle_threshold:
             self.current_movement_command = "forward"
             return
 
-        if self.left_distance >= self.obstacle_threshold and self.right_distance >= self.obstacle_threshold:
-            self.current_movement_command = "forward"
-            return
-
-        if self.left_distance <= self.right_distance:
-            self.current_movement_command = "turn_right"
-        else:
+        if left_distance <= right_distance:
             self.current_movement_command = "turn_left"
+        else:
+            self.current_movement_command = "turn_right"
 
     def start_console_thread(self):
         print('=== Console thread started ===')
@@ -1145,8 +1159,7 @@ class SpotMicroController:
 
         print("Shutting down...")
         try:
-            if self.sensors_enabled:
-                GPIO.cleanup()
+            GPIO.cleanup()
         except Exception as e:
             print(f"GPIO cleanup error: {e}")
         pygame.quit()
