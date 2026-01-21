@@ -308,9 +308,9 @@ class SpotMicroController:
             return
 
         if left_distance <= right_distance:
-            self.current_movement_command = "turn_right"
-        else:
             self.current_movement_command = "turn_left"
+        else:
+            self.current_movement_command = "turn_right"
 
     def start_console_thread(self):
         print('=== Console thread started ===')
