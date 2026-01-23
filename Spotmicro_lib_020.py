@@ -123,7 +123,9 @@ class Spot:
     
     
     phase = pi/8 # optimum position when leg is fully lifted
-        
+
+    # Claviculum -> Humerus -> Radii
+    # FL -> FR -> BR -> BL
     servo_table = [4,5,6,0,1,2,12,13,14,8,9,10]
 
     def interp(x1,x2,steps):
