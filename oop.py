@@ -669,6 +669,7 @@ class SpotMicroController:
         def transition_to_neutral():
             """Transition from any state to neutral (standing) position"""
             transitions_needed = []
+            needs_wait = False
             
             # If paw is raised, lower it first
             if self.sitting and (self.joypal > -1.0 or self.joypar > -1.0):
@@ -677,21 +678,25 @@ class SpotMicroController:
                 self.paw_holding = False  # Cancel any ongoing paw hold
             
             # If sitting, stand up
-            if self.sitting and not self.stop and not self.lock:
-                print("Transition: Standing up from sitting")
-                transitions_needed.append("stand")
-            elif self.sitting:
-                # If in middle of sitting animation, wait for it to complete
-                print("Waiting for sitting animation to complete before transition")
+            if self.sitting:
+                if not self.stop and not self.lock:
+                    print("Transition: Standing up from sitting")
+                    transitions_needed.append("stand")
+                else:
+                    # If in middle of sitting animation, need to wait
+                    print("Waiting for sitting animation to complete before transition")
+                    needs_wait = True
             
             # If lying, stand up
-            if self.lying and not self.stop and not self.lock:
-                print("Transition: Standing up from lying")
-                transitions_needed.append("stand")
-            elif self.lying:
-                print("Waiting for lying animation to complete before transition")
+            if self.lying:
+                if not self.stop and not self.lock:
+                    print("Transition: Standing up from lying")
+                    transitions_needed.append("stand")
+                else:
+                    print("Waiting for lying animation to complete before transition")
+                    needs_wait = True
             
-            return transitions_needed
+            return transitions_needed, needs_wait
 
         with self.console_lock:
             while self.command_queue:
@@ -703,7 +708,12 @@ class SpotMicroController:
                 needs_transition = command in movement_commands and not self.Free
                 
                 if needs_transition:
-                    transitions = transition_to_neutral()
+                    transitions, needs_wait = transition_to_neutral()
+                    if needs_wait:
+                        # Re-queue the command to try again later
+                        print(f"Animation in progress, re-queuing '{command}'")
+                        self.command_queue.append(command)
+                        continue
                     if transitions:
                         print(f"Command '{command}' requires transition through neutral state")
                         # Add transitions to the front of the queue
