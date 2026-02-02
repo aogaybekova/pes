@@ -6,7 +6,7 @@ import threading
 import queue
 import numpy as np
 import copy
-from math import pi, sin, cos, atan, sqrt
+from math import pi, sin, cos, atan, sqrt, radians
 from time import sleep, time
 import csv
 import socket
@@ -226,6 +226,11 @@ class SpotMicroController:
         GPIO.output(self.TRIG_LEFT, False)
         GPIO.output(self.TRIG_RIGHT, False)
         
+        # Sensor angle correction (sensors tilted ~40 degrees)
+        # Measured 40cm shows actual 30cm distance, so correction factor is cos(40°)
+        self.sensor_tilt_angle = 40  # degrees
+        self.sensor_correction_factor = cos(radians(self.sensor_tilt_angle))  # ~0.766
+        
         # Sensor state
         self.last_left_distance = -1
         self.last_right_distance = -1
@@ -233,6 +238,8 @@ class SpotMicroController:
         self.touch_detected = False
         self.last_touch_time = 0
         self.touch_sequence_step = 0  # 0: none, 1: stopped, 2: sitting, 3: paw given
+        self.paw_hold_start_time = 0  # Timer for holding paw
+        self.paw_holding = False  # Flag for 10-second paw hold
         
         # == Camera Setup ==
         self.camera = None
@@ -279,7 +286,7 @@ class SpotMicroController:
     # ==================== SENSOR METHODS ====================
     
     def measure_distance(self, trig_pin, echo_pin):
-        """Measure distance using HC-SR04 ultrasonic sensor"""
+        """Measure distance using HC-SR04 ultrasonic sensor with angle correction"""
         try:
             GPIO.output(trig_pin, True)
             sleep(0.00001)
@@ -304,11 +311,15 @@ class SpotMicroController:
                     return -1
             
             elapsed_time = pulse_end - pulse_start
-            distance_cm = elapsed_time * 17150
+            measured_distance_cm = elapsed_time * 17150
+            
+            # Apply angle correction for tilted sensors (~40 degrees)
+            # actual_distance = measured_distance * cos(40°)
+            actual_distance_cm = measured_distance_cm * self.sensor_correction_factor
             
             # Filter valid range
-            if 2.0 <= distance_cm <= 400.0:
-                return distance_cm
+            if 2.0 <= actual_distance_cm <= 400.0:
+                return actual_distance_cm
             return -1
         except Exception as e:
             print(f"Error measuring distance: {e}")
@@ -334,41 +345,73 @@ class SpotMicroController:
             self.touch_detected = False
     
     def handle_obstacle_avoidance(self):
-        """Handle obstacle avoidance when moving forward"""
-        if self.current_movement_command != "forward":
+        """Handle obstacle avoidance - keep turning until obstacle is clear"""
+        # Only process if we were trying to move forward or are in obstacle avoidance mode
+        if self.current_movement_command != "forward" and not hasattr(self, 'avoiding_obstacle'):
             return
         
+        # Initialize obstacle avoidance state if not present
+        if not hasattr(self, 'avoiding_obstacle'):
+            self.avoiding_obstacle = False
+            self.avoidance_turn_direction = None
+        
         # Check if obstacle detected
-        obstacle_threshold = 30  # cm
+        obstacle_threshold = 30  # cm (actual distance after correction)
         left_blocked = 0 < self.last_left_distance < obstacle_threshold
         right_blocked = 0 < self.last_right_distance < obstacle_threshold
         
         if left_blocked or right_blocked:
             self.obstacle_detected = True
             
-            # Turn towards clearer side
-            if left_blocked and not right_blocked:
-                # Turn right
-                print("Obstacle on left, turning right")
-                self.accept_command("turn_right")
-            elif right_blocked and not left_blocked:
-                # Turn left
-                print("Obstacle on right, turning left")
-                self.accept_command("turn_left")
-            elif left_blocked and right_blocked:
-                # Both blocked, turn to less blocked side
-                if self.last_left_distance > self.last_right_distance:
-                    print("Obstacles detected, turning left (clearer)")
-                    self.accept_command("turn_left")
+            # If not yet avoiding, determine turn direction and transition to neutral if needed
+            if not self.avoiding_obstacle:
+                print("Obstacle detected, transitioning to avoidance mode")
+                self.avoiding_obstacle = True
+                
+                # Determine which way to turn
+                if left_blocked and not right_blocked:
+                    self.avoidance_turn_direction = "turn_right"
+                    print("Obstacle on left, will turn right")
+                elif right_blocked and not left_blocked:
+                    self.avoidance_turn_direction = "turn_left"
+                    print("Obstacle on right, will turn left")
                 else:
-                    print("Obstacles detected, turning right (clearer)")
-                    self.accept_command("turn_right")
+                    # Both blocked, turn to less blocked side
+                    if self.last_left_distance > self.last_right_distance:
+                        self.avoidance_turn_direction = "turn_left"
+                        print("Obstacles detected, turning left (clearer)")
+                    else:
+                        self.avoidance_turn_direction = "turn_right"
+                        print("Obstacles detected, turning right (clearer)")
+                
+                # Stop forward movement and start turning
+                self.current_movement_command = "stop"
+                self.accept_command("stop_walk")
+            
+            # Continue turning in the chosen direction
+            if self.avoiding_obstacle and self.avoidance_turn_direction:
+                if self.current_movement_command != self.avoidance_turn_direction:
+                    print(f"Continuing to {self.avoidance_turn_direction}")
+                    self.accept_command(self.avoidance_turn_direction)
         else:
+            # Obstacle cleared
             self.obstacle_detected = False
+            
+            # If we were avoiding an obstacle, transition back to forward
+            if self.avoiding_obstacle:
+                print("Obstacle cleared, transitioning back to forward movement")
+                self.avoiding_obstacle = False
+                self.avoidance_turn_direction = None
+                
+                # Transition: stop turning, then go forward
+                self.accept_command("stop_walk")
+                # Queue forward command to execute after stop completes
+                self.accept_command("forward")
     
     def handle_touch_event(self):
-        """Handle touch sensor reaction: Stop -> Sit -> Give Paw (Right)"""
+        """Handle touch sensor reaction: Stop -> Sit -> Give Paw (hold for 10 seconds)"""
         print(f"Touch detected! Sequence step: {self.touch_sequence_step}")
+        current_time = time()
         
         if self.touch_sequence_step == 0:
             # First touch: Stop
@@ -381,14 +424,35 @@ class SpotMicroController:
             self.accept_command("sit")
             self.touch_sequence_step = 2
         elif self.touch_sequence_step == 2 and self.sitting and self.t >= 0.99:
-            # Third touch: Give Paw Right
-            print("Touch sequence: GIVE PAW RIGHT")
-            self.accept_command("paw_right")
-            self.touch_sequence_step = 3
+            # Third touch and beyond: Give Paw Right and hold for 10 seconds
+            if not self.paw_holding:
+                print("Touch sequence: GIVE PAW RIGHT (holding for 10 seconds)")
+                self.accept_command("paw_right")
+                self.paw_holding = True
+                self.paw_hold_start_time = current_time
+                self.touch_sequence_step = 3
+            else:
+                print("Paw already being held, ignoring touch")
         elif self.touch_sequence_step >= 3 and self.sitting and self.t >= 0.99:
-            # Further touches while sitting: Give Paw Right
-            print("Touch sequence: GIVE PAW RIGHT (repeat)")
-            self.accept_command("paw_right")
+            # Already in paw holding state
+            if not self.paw_holding:
+                print("Touch sequence: GIVE PAW RIGHT (holding for 10 seconds)")
+                self.accept_command("paw_right")
+                self.paw_holding = True
+                self.paw_hold_start_time = current_time
+            else:
+                print("Paw already being held, ignoring touch")
+    
+    def check_paw_hold_timer(self):
+        """Check if 10 seconds have passed and lower the paw"""
+        if self.paw_holding:
+            current_time = time()
+            elapsed = current_time - self.paw_hold_start_time
+            if elapsed >= 10.0:
+                print("10 seconds elapsed, lowering paw")
+                self.accept_command("paw_down")
+                self.paw_holding = False
+                self.paw_hold_start_time = 0
     
     # ==================== CAMERA METHODS ====================
     
@@ -601,11 +665,54 @@ class SpotMicroController:
                 self.walking_speed = 0
                 self.current_action = "Walking mode started"
                 print("=== WALKING STARTED ===")
+        
+        def transition_to_neutral():
+            """Transition from any state to neutral (standing) position"""
+            transitions_needed = []
+            
+            # If paw is raised, lower it first
+            if self.sitting and (self.joypal > -1.0 or self.joypar > -1.0):
+                print("Transition: Lowering paw")
+                transitions_needed.append("paw_down")
+                self.paw_holding = False  # Cancel any ongoing paw hold
+            
+            # If sitting, stand up
+            if self.sitting and not self.stop and not self.lock:
+                print("Transition: Standing up from sitting")
+                transitions_needed.append("stand")
+            elif self.sitting:
+                # If in middle of sitting animation, wait for it to complete
+                print("Waiting for sitting animation to complete before transition")
+            
+            # If lying, stand up
+            if self.lying and not self.stop and not self.lock:
+                print("Transition: Standing up from lying")
+                transitions_needed.append("stand")
+            elif self.lying:
+                print("Waiting for lying animation to complete before transition")
+            
+            return transitions_needed
 
         with self.console_lock:
             while self.command_queue:
                 command = self.command_queue.pop(0)
                 print(f"Executing: {command}")
+                
+                # Check if we need transitions for movement commands
+                movement_commands = ["forward", "backward", "left", "right", "turn_left", "turn_right", "walk"]
+                needs_transition = command in movement_commands and not self.Free
+                
+                if needs_transition:
+                    transitions = transition_to_neutral()
+                    if transitions:
+                        print(f"Command '{command}' requires transition through neutral state")
+                        # Add transitions to the front of the queue
+                        for trans in reversed(transitions):
+                            self.command_queue.insert(0, trans)
+                        # Re-add the original command after transitions
+                        self.command_queue.insert(len(transitions), command)
+                        print(f"Transition sequence: {transitions} -> {command}")
+                        continue  # Process transitions first
 
                 if command == "quit":
                     self.continuer = False
@@ -899,8 +1006,11 @@ class SpotMicroController:
                 self.read_sensors()
                 
                 # Handle obstacle avoidance
-                if self.walking:
+                if self.walking or hasattr(self, 'avoiding_obstacle') and self.avoiding_obstacle:
                     self.handle_obstacle_avoidance()
+            
+            # ---- Check paw hold timer ----
+            self.check_paw_hold_timer()
             
             # ---- Logging (every 30 frames) ----
             if self.frame_counter % 30 == 0:
