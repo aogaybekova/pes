@@ -100,6 +100,7 @@ class SpotMicroController:
         # Animation state tracking
         self.in_turn_animation = False  # Flag to track if currently executing turn
         self.turn_start_time = 0  # Track when turn started
+        self.TURN_ANIMATION_DURATION = 1.0  # Time units for a complete turn cycle
 
 
         # == Walking params
@@ -252,6 +253,13 @@ class SpotMicroController:
                 self.current_action = "Walking mode started"
                 print("[STATE] === WALKING STARTED ===")
 
+        def requeue_command_if_not_exists(cmd, reason):
+            """Helper to re-queue a command if it's not already in the queue"""
+            if cmd not in self.command_queue_set:
+                self.command_queue.append(cmd)
+                self.command_queue_set.add(cmd)
+                print(f"[QUEUE] Re-queuing '{cmd}': {reason}")
+
         with self.console_lock:
             while self.command_queue:
                 command = self.command_queue.pop(0)
@@ -326,9 +334,7 @@ class SpotMicroController:
                         if self.in_turn_animation:
                             print("[STOP_WALK] Waiting for turn to complete before stopping...")
                             # Re-queue the stop_walk command to execute after turn completes
-                            if "stop_walk" not in self.command_queue_set:
-                                self.command_queue.append("stop_walk")
-                                self.command_queue_set.add("stop_walk")
+                            requeue_command_if_not_exists("stop_walk", "Turn animation in progress")
                             continue
                         
                         self.stop = True
@@ -406,9 +412,7 @@ class SpotMicroController:
                     if self.walking and not self.Free:
                         print("[SIT] Waiting for walking animation to complete before transition")
                         # Re-queue sit command to execute after walking completes
-                        if "sit" not in self.command_queue_set:
-                            self.command_queue.append("sit")
-                            self.command_queue_set.add("sit")
+                        requeue_command_if_not_exists("sit", "Walking animation in progress")
                         continue
                     
                     if not self.sitting and self.Free:
@@ -653,7 +657,7 @@ class SpotMicroController:
                     self.cw = 1
                     
                     # Check if turn animation has completed a full cycle
-                    if self.in_turn_animation and (self.t - self.turn_start_time) >= 1.0:
+                    if self.in_turn_animation and (self.t - self.turn_start_time) >= self.TURN_ANIMATION_DURATION:
                         self.in_turn_animation = False
                         print("[TURN] === TURN LEFT COMPLETED ===")
 
@@ -664,7 +668,7 @@ class SpotMicroController:
                     self.cw = -1
                     
                     # Check if turn animation has completed a full cycle
-                    if self.in_turn_animation and (self.t - self.turn_start_time) >= 1.0:
+                    if self.in_turn_animation and (self.t - self.turn_start_time) >= self.TURN_ANIMATION_DURATION:
                         self.in_turn_animation = False
                         print("[TURN] === TURN RIGHT COMPLETED ===")
 
