@@ -203,6 +203,22 @@ class SpotMicroController:
                 self.command_queue.append(command)
                 self.command_queue_set.add(command)
                 print(f"[QUEUE] Command added: {command} (queue size: {len(self.command_queue)})")
+    
+    def _requeue_command_if_not_exists(self, cmd, reason):
+        """Helper to re-queue a command if it's not already in the queue"""
+        if cmd not in self.command_queue_set:
+            self.command_queue.append(cmd)
+            self.command_queue_set.add(cmd)
+            print(f"[QUEUE] Re-queuing '{cmd}': {reason}")
+    
+    def _check_turn_completion(self):
+        """Check if turn animation has completed and update state"""
+        if self.in_turn_animation and (self.t - self.turn_start_time) >= self.TURN_ANIMATION_DURATION:
+            self.in_turn_animation = False
+            turn_direction = "LEFT" if self.cw == 1 else "RIGHT"
+            print(f"[TURN] === TURN {turn_direction} COMPLETED ===")
+            return True
+        return False
 
     def start_console_thread(self):
         print('=== Console thread started ===')
@@ -252,13 +268,6 @@ class SpotMicroController:
                 self.walking_speed = 0
                 self.current_action = "Walking mode started"
                 print("[STATE] === WALKING STARTED ===")
-
-        def requeue_command_if_not_exists(cmd, reason):
-            """Helper to re-queue a command if it's not already in the queue"""
-            if cmd not in self.command_queue_set:
-                self.command_queue.append(cmd)
-                self.command_queue_set.add(cmd)
-                print(f"[QUEUE] Re-queuing '{cmd}': {reason}")
 
         with self.console_lock:
             while self.command_queue:
@@ -334,7 +343,7 @@ class SpotMicroController:
                         if self.in_turn_animation:
                             print("[STOP_WALK] Waiting for turn to complete before stopping...")
                             # Re-queue the stop_walk command to execute after turn completes
-                            requeue_command_if_not_exists("stop_walk", "Turn animation in progress")
+                            self._requeue_command_if_not_exists("stop_walk", "Turn animation in progress")
                             continue
                         
                         self.stop = True
@@ -412,7 +421,7 @@ class SpotMicroController:
                     if self.walking and not self.Free:
                         print("[SIT] Waiting for walking animation to complete before transition")
                         # Re-queue sit command to execute after walking completes
-                        requeue_command_if_not_exists("sit", "Walking animation in progress")
+                        self._requeue_command_if_not_exists("sit", "Walking animation in progress")
                         continue
                     
                     if not self.sitting and self.Free:
@@ -657,9 +666,7 @@ class SpotMicroController:
                     self.cw = 1
                     
                     # Check if turn animation has completed a full cycle
-                    if self.in_turn_animation and (self.t - self.turn_start_time) >= self.TURN_ANIMATION_DURATION:
-                        self.in_turn_animation = False
-                        print("[TURN] === TURN LEFT COMPLETED ===")
+                    self._check_turn_completion()
 
                 elif self.current_movement_command == "turn_right":
                     self.walking_speed = 100
@@ -668,9 +675,7 @@ class SpotMicroController:
                     self.cw = -1
                     
                     # Check if turn animation has completed a full cycle
-                    if self.in_turn_animation and (self.t - self.turn_start_time) >= self.TURN_ANIMATION_DURATION:
-                        self.in_turn_animation = False
-                        print("[TURN] === TURN RIGHT COMPLETED ===")
+                    self._check_turn_completion()
 
                 elif self.current_movement_command == "stop":
                     self.walking_speed = 0.0
