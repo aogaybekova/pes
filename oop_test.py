@@ -371,7 +371,7 @@ class SpotMicroController:
                 # Первое обнаружение - ждем подтверждения
                 if not hasattr(self, 'first_obstacle_detection_time'):
                     self.first_obstacle_detection_time = current_time
-                    print("⚠️ Obstacle detected, confirming...")
+                    print(" Obstacle detected, confirming...")
                     return
                 
                 # Проверяем подтверждение
@@ -836,6 +836,10 @@ class SpotMicroController:
                     ensure_walking_mode()
                     self.current_movement_command = "forward"
                     self.target_speed = 100
+                    # сброс датчиков касания
+                    self.touch_sequence_step = 0
+                    self.paw_holding = False
+                    self.paw_hold_start_time = 0
                     self.current_action = "Moving forward"
 
                 elif command == "backward":
@@ -869,6 +873,9 @@ class SpotMicroController:
                         self.stop = True
                         self.lock = True
                         self.tstop = int(self.t)
+                        self.touch_sequence_step = 0
+                        self.paw_holding = False
+                        self.paw_hold_start_time = 0
                         self.current_movement_command = "stop"
                         self.current_action = "Stopping walk..."
                         print("=== STOPPING WALK SEQUENCE INITIATED ===")
@@ -932,6 +939,9 @@ class SpotMicroController:
                     self.current_movement_command = "stop"
                     self.joypal = -1
                     self.joypar = -1
+                    self.touch_sequence_step = 0
+                    self.paw_holding = False
+                    self.paw_hold_start_time = 0
                     self.current_action = "EMERGENCY STOP - All motions stopped"
                     print("*** EMERGENCY STOP ***")
 
@@ -959,6 +969,9 @@ class SpotMicroController:
                         self.stop = True
                         self.lock = True
                         self.pawing = False
+                        self.touch_sequence_step = 0
+                        self.paw_holding = False
+                        self.paw_hold_start_time = 0
                         self.current_action = "Standing up"
                         print("=== STANDING UP ===")
                     elif self.Free:
