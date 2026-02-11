@@ -6,8 +6,11 @@ import threading
 import queue
 import numpy as np
 import copy
-from math import pi, sin, cos, atan, sqrt
+from math import pi, sin, cos, atan, sqrt, radians
 from time import sleep, time
+import csv
+import socket
+from datetime import datetime
 
 # External dependencies
 import pygame
@@ -17,6 +20,16 @@ import adafruit_pca9685
 import adafruit_mpu6050
 #import mpu6050 #import mpu6050
 from adafruit_servokit import ServoKit
+import RPi.GPIO as GPIO
+
+# Camera imports
+try:
+    from picamera2 import Picamera2
+    import cv2
+    CAMERA_AVAILABLE = True
+except ImportError:
+    CAMERA_AVAILABLE = False
+    print("Warning: Picamera2 or OpenCV not available. Camera functionality disabled.")
 
 # SpotMicro-specific imports
 import Spotmicro_lib_020
@@ -186,6 +199,74 @@ class SpotMicroController:
         self.clock = pygame.time.Clock()
         self.current_action = "Ready"
 
+        # == Sensor Configuration ==
+        # HC-SR04 Ultrasonic sensors (left and right)
+        GPIO.setmode(GPIO.BCM)
+        GPIO.setwarnings(False)
+        
+        # Left sensor
+        self.TRIG_LEFT = 14  # BCM14
+        self.ECHO_LEFT = 15  # BCM15
+        
+        # Right sensor
+        self.TRIG_RIGHT = 23  # BCM23
+        self.ECHO_RIGHT = 24  # BCM24
+        
+        # Touch sensor
+        self.TOUCH_PIN = 17  # BCM17
+        
+        # Setup sensor pins
+        GPIO.setup(self.TRIG_LEFT, GPIO.OUT)
+        GPIO.setup(self.ECHO_LEFT, GPIO.IN)
+        GPIO.setup(self.TRIG_RIGHT, GPIO.OUT)
+        GPIO.setup(self.ECHO_RIGHT, GPIO.IN)
+        GPIO.setup(self.TOUCH_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+        
+        # Initialize ultrasonic triggers
+        GPIO.output(self.TRIG_LEFT, False)
+        GPIO.output(self.TRIG_RIGHT, False)
+        
+        # Sensor angle correction (sensors tilted ~40 degrees)
+        # Measured 40cm shows actual 30cm distance, so correction factor is cos(40°)
+        self.sensor_tilt_angle = 40  # degrees
+        self.sensor_correction_factor = cos(radians(self.sensor_tilt_angle))  # ~0.766
+        
+        # Sensor state
+        self.last_left_distance = -1
+        self.last_right_distance = -1
+        self.obstacle_detected = False
+        self.touch_detected = False
+        self.last_touch_time = 0
+        self.touch_sequence_step = 0  # 0: none, 1: stopped, 2: sitting, 3: paw given
+        self.paw_hold_start_time = 0  # Timer for holding paw
+        self.paw_holding = False  # Flag for 10-second paw hold
+        
+        # == Camera Setup ==
+        self.camera = None
+        if CAMERA_AVAILABLE:
+            try:
+                self.camera = Picamera2()
+                camera_config = self.camera.create_still_configuration()
+                self.camera.configure(camera_config)
+                print("Camera initialized successfully")
+            except Exception as e:
+                print(f"Warning: Could not initialize camera: {e}")
+                self.camera = None
+        
+        # Create photos directory
+        self.photos_dir = os.path.join(os.path.dirname(__file__), "photos")
+        os.makedirs(self.photos_dir, exist_ok=True)
+        
+        # == RL Environment Logging ==
+        self.log_file = os.path.join(os.path.dirname(__file__), "rl_environment_log.csv")
+        self.init_logging()
+        
+        # == TCP Server for App Control ==
+        self.tcp_server_socket = None
+        self.tcp_port = 5000
+        self.tcp_enabled = True
+        self.start_tcp_server()
+
     # ==================== PRIMARY INTERFACE ====================
 
     def accept_command(self, command):
@@ -201,6 +282,350 @@ class SpotMicroController:
     def start(self):
         self.start_console_thread()
         self.main_loop()
+
+    # ==================== SENSOR METHODS ====================
+    
+    def measure_distance(self, trig_pin, echo_pin):
+        """Measure distance using HC-SR04 ultrasonic sensor with angle correction"""
+        try:
+            GPIO.output(trig_pin, True)
+            sleep(0.00001)
+            GPIO.output(trig_pin, False)
+            
+            # Wait for echo to go high
+            timeout_start = time() + 0.04
+            pulse_start = time()
+            
+            while GPIO.input(echo_pin) == 0:
+                pulse_start = time()
+                if pulse_start > timeout_start:
+                    return -1
+            
+            # Wait for echo to go low
+            timeout_end = time() + 0.04
+            pulse_end = time()
+            
+            while GPIO.input(echo_pin) == 1:
+                pulse_end = time()
+                if pulse_end > timeout_end:
+                    return -1
+            
+            elapsed_time = pulse_end - pulse_start
+            measured_distance_cm = elapsed_time * 17150
+            
+            # Apply angle correction for tilted sensors (~40 degrees)
+            # actual_distance = measured_distance * cos(40°)
+            actual_distance_cm = measured_distance_cm * self.sensor_correction_factor
+            
+            # Filter valid range
+            if 2.0 <= actual_distance_cm <= 400.0:
+                return actual_distance_cm
+            return -1
+        except Exception as e:
+            print(f"Error measuring distance: {e}")
+            return -1
+    
+    def read_sensors(self):
+        """Read all sensors and update state"""
+        # Read ultrasonic sensors
+        self.last_left_distance = self.measure_distance(self.TRIG_LEFT, self.ECHO_LEFT)
+        sleep(0.01)  # Small delay between sensors
+        self.last_right_distance = self.measure_distance(self.TRIG_RIGHT, self.ECHO_RIGHT)
+        
+        # Read touch sensor (with pull-up: LOW=touched, HIGH=not touched)
+        touch_state = GPIO.input(self.TOUCH_PIN)
+        current_time = time()
+        
+        # Detect touch event (transition to touched - LOW with pull-up)
+        if touch_state == 0 and not self.touch_detected:
+            self.touch_detected = True
+            self.last_touch_time = current_time
+            self.handle_touch_event()
+        elif touch_state == 1:
+            self.touch_detected = False
+    
+    def handle_obstacle_avoidance(self):
+        """Handle obstacle avoidance - keep turning until obstacle is clear"""
+        # Only process if we were trying to move forward or are in obstacle avoidance mode
+        if self.current_movement_command != "forward" and not hasattr(self, 'avoiding_obstacle'):
+            return
+        
+        # Initialize obstacle avoidance state if not present
+        if not hasattr(self, 'avoiding_obstacle'):
+            self.avoiding_obstacle = False
+            self.avoidance_turn_direction = None
+        
+        # Check if obstacle detected
+        obstacle_threshold = 30  # cm (actual distance after correction)
+        left_blocked = 0 < self.last_left_distance < obstacle_threshold
+        right_blocked = 0 < self.last_right_distance < obstacle_threshold
+        
+        if left_blocked or right_blocked:
+            self.obstacle_detected = True
+            
+            # If not yet avoiding, determine turn direction and transition to neutral if needed
+            if not self.avoiding_obstacle:
+                print("Obstacle detected, transitioning to avoidance mode")
+                self.avoiding_obstacle = True
+                
+                # Determine which way to turn
+                if left_blocked and not right_blocked:
+                    self.avoidance_turn_direction = "turn_right"
+                    print("Obstacle on left, will turn right")
+                elif right_blocked and not left_blocked:
+                    self.avoidance_turn_direction = "turn_left"
+                    print("Obstacle on right, will turn left")
+                else:
+                    # Both blocked, turn to less blocked side
+                    if self.last_left_distance > self.last_right_distance:
+                        self.avoidance_turn_direction = "turn_left"
+                        print("Obstacles detected, turning left (clearer)")
+                    else:
+                        self.avoidance_turn_direction = "turn_right"
+                        print("Obstacles detected, turning right (clearer)")
+                
+                # Stop forward movement and start turning
+                self.current_movement_command = "stop"
+                self.accept_command("stop_walk")
+            
+            # Continue turning in the chosen direction
+            if self.avoiding_obstacle and self.avoidance_turn_direction:
+                if self.current_movement_command != self.avoidance_turn_direction:
+                    print(f"Continuing to {self.avoidance_turn_direction}")
+                    self.accept_command(self.avoidance_turn_direction)
+        else:
+            # Obstacle cleared
+            self.obstacle_detected = False
+            
+            # If we were avoiding an obstacle, transition back to forward
+            if self.avoiding_obstacle:
+                print("Obstacle cleared, transitioning back to forward movement")
+                self.avoiding_obstacle = False
+                self.avoidance_turn_direction = None
+                
+                # Transition: stop turning, then go forward
+                self.accept_command("stop_walk")
+                # Queue forward command to execute after stop completes
+                self.accept_command("forward")
+    
+    def handle_touch_event(self):
+        """Handle touch sensor reaction: Stop -> Sit -> Give Paw (hold for 10 seconds)"""
+        print(f"Touch detected! Sequence step: {self.touch_sequence_step}")
+        current_time = time()
+        
+        if self.touch_sequence_step == 0:
+            # First touch: Stop
+            print("Touch sequence: STOP")
+            self.accept_command("stop")
+            self.touch_sequence_step = 1
+        elif self.touch_sequence_step == 1 and self.Free:
+            # Second touch: Sit
+            print("Touch sequence: SIT")
+            self.accept_command("sit")
+            self.touch_sequence_step = 2
+        elif self.touch_sequence_step == 2 and self.sitting and self.t >= 0.99:
+            # Third touch and beyond: Give Paw Right and hold for 10 seconds
+            if not self.paw_holding:
+                print("Touch sequence: GIVE PAW RIGHT (holding for 10 seconds)")
+                self.accept_command("paw_right")
+                self.paw_holding = True
+                self.paw_hold_start_time = current_time
+                self.touch_sequence_step = 3
+            else:
+                print("Paw already being held, ignoring touch")
+        elif self.touch_sequence_step >= 3 and self.sitting and self.t >= 0.99:
+            # Already in paw holding state
+            if not self.paw_holding:
+                print("Touch sequence: GIVE PAW RIGHT (holding for 10 seconds)")
+                self.accept_command("paw_right")
+                self.paw_holding = True
+                self.paw_hold_start_time = current_time
+            else:
+                print("Paw already being held, ignoring touch")
+    
+    def check_paw_hold_timer(self):
+        """Check if 10 seconds have passed and lower the paw"""
+        if self.paw_holding:
+            current_time = time()
+            elapsed = current_time - self.paw_hold_start_time
+            if elapsed >= 10.0:
+                print("10 seconds elapsed, lowering paw")
+                self.accept_command("paw_down")
+                self.paw_holding = False
+                self.paw_hold_start_time = 0
+    
+    # ==================== CAMERA METHODS ====================
+    
+    def capture_photo(self):
+        """Capture photo using Picamera2 and OpenCV"""
+        if not CAMERA_AVAILABLE or self.camera is None:
+            print("Camera not available")
+            return False
+        
+        try:
+            # Start camera if not already started
+            if not self.camera.started:
+                self.camera.start()
+                sleep(0.5)  # Allow camera to warm up
+            
+            # Capture image
+            image = self.camera.capture_array()
+            
+            # Convert to OpenCV format (RGB to BGR)
+            image_bgr = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+            
+            # Generate filename with timestamp
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"photo_{timestamp}.jpg"
+            filepath = os.path.join(self.photos_dir, filename)
+            
+            # Save photo
+            cv2.imwrite(filepath, image_bgr)
+            print(f"Photo saved: {filepath}")
+            
+            return True
+        except Exception as e:
+            print(f"Error capturing photo: {e}")
+            return False
+    
+    # ==================== LOGGING METHODS ====================
+    
+    def init_logging(self):
+        """Initialize CSV logging for RL environment"""
+        try:
+            with open(self.log_file, 'w', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow([
+                    'timestamp', 'command', 'action', 
+                    'left_distance', 'right_distance', 'touch_detected',
+                    'imu_roll', 'imu_pitch', 'imu_accel_x', 'imu_accel_y', 'imu_accel_z',
+                    'servo_0', 'servo_1', 'servo_2', 'servo_3', 'servo_4', 'servo_5',
+                    'servo_6', 'servo_7', 'servo_8', 'servo_9', 'servo_10', 'servo_11'
+                ])
+            print(f"Logging initialized: {self.log_file}")
+        except Exception as e:
+            print(f"Error initializing logging: {e}")
+    
+    def log_state(self, command=""):
+        """Log current robot state to CSV"""
+        try:
+            # Get IMU data
+            try:
+                accel = self.mpu.acceleration
+                accel_x, accel_y, accel_z = accel
+            except:
+                accel_x = accel_y = accel_z = 0.0
+            
+            roll = self.Angle[0] if len(self.Angle) > 0 else 0.0
+            pitch = self.Angle[1] if len(self.Angle) > 1 else 0.0
+            
+            # Log to CSV
+            with open(self.log_file, 'a', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow([
+                    datetime.now().isoformat(),
+                    command,
+                    self.current_action,
+                    self.last_left_distance,
+                    self.last_right_distance,
+                    1 if self.touch_detected else 0,
+                    roll,
+                    pitch,
+                    accel_x,
+                    accel_y,
+                    accel_z,
+                    *self.current_servo_angles
+                ])
+        except Exception as e:
+            print(f"Error logging state: {e}")
+    
+    # ==================== TCP SERVER METHODS ====================
+    
+    def start_tcp_server(self):
+        """Start TCP server for app control
+        
+        Note: Binds to 0.0.0.0 to allow mobile app connections.
+        WARNING: This exposes the server to all network interfaces.
+        Use only on trusted networks or implement authentication if needed.
+        """
+        if not self.tcp_enabled:
+            return
+        
+        try:
+            self.tcp_server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.tcp_server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            # Bind to all interfaces for mobile app access
+            # Change to '127.0.0.1' for local-only access if security is a concern
+            self.tcp_server_socket.bind(('0.0.0.0', self.tcp_port))
+            self.tcp_server_socket.listen(5)
+            self.tcp_server_socket.settimeout(1.0)  # Non-blocking accept
+            
+            # Start TCP handler thread
+            tcp_thread = threading.Thread(target=self.tcp_handler_thread, daemon=True)
+            tcp_thread.start()
+            
+            print(f"TCP server started on port {self.tcp_port}")
+        except Exception as e:
+            print(f"Error starting TCP server: {e}")
+            self.tcp_enabled = False
+    
+    def tcp_handler_thread(self):
+        """Handle TCP connections from app"""
+        print("TCP handler thread started")
+        
+        while self.continuer and self.tcp_enabled:
+            try:
+                # Accept connection with timeout
+                try:
+                    client_socket, address = self.tcp_server_socket.accept()
+                    print(f"TCP client connected: {address}")
+                    
+                    # Handle client in separate thread
+                    client_thread = threading.Thread(
+                        target=self.handle_tcp_client, 
+                        args=(client_socket, address),
+                        daemon=True
+                    )
+                    client_thread.start()
+                except socket.timeout:
+                    continue
+            except Exception as e:
+                if self.continuer:
+                    print(f"TCP accept error: {e}")
+                sleep(0.1)
+    
+    def handle_tcp_client(self, client_socket, address):
+        """Handle individual TCP client connection"""
+        try:
+            client_socket.settimeout(30.0)
+            
+            while self.continuer:
+                try:
+                    data = client_socket.recv(1024)
+                    if not data:
+                        break
+                    
+                    command = data.decode('utf-8').strip().lower()
+                    print(f"TCP command from {address}: {command}")
+                    
+                    # Process command
+                    if command == "photo":
+                        success = self.capture_photo()
+                        response = "OK" if success else "ERROR"
+                        client_socket.send(response.encode('utf-8'))
+                    else:
+                        # Regular movement/action command
+                        self.accept_command(command)
+                        client_socket.send(b"OK")
+                    
+                except socket.timeout:
+                    break
+                except Exception as e:
+                    print(f"TCP client error: {e}")
+                    break
+        finally:
+            client_socket.close()
+            print(f"TCP client disconnected: {address}")
 
     # ==================== CONSOLE HANDLER ====================
 
@@ -240,11 +665,64 @@ class SpotMicroController:
                 self.walking_speed = 0
                 self.current_action = "Walking mode started"
                 print("=== WALKING STARTED ===")
+        
+        def transition_to_neutral():
+            """Transition from any state to neutral (standing) position"""
+            transitions_needed = []
+            needs_wait = False
+            
+            # If paw is raised, lower it first
+            if self.sitting and (self.joypal > -1.0 or self.joypar > -1.0):
+                print("Transition: Lowering paw")
+                transitions_needed.append("paw_down")
+                self.paw_holding = False  # Cancel any ongoing paw hold
+            
+            # If sitting, stand up
+            if self.sitting:
+                if not self.stop and not self.lock:
+                    print("Transition: Standing up from sitting")
+                    transitions_needed.append("stand")
+                else:
+                    # If in middle of sitting animation, need to wait
+                    print("Waiting for sitting animation to complete before transition")
+                    needs_wait = True
+            
+            # If lying, stand up
+            if self.lying:
+                if not self.stop and not self.lock:
+                    print("Transition: Standing up from lying")
+                    transitions_needed.append("stand")
+                else:
+                    print("Waiting for lying animation to complete before transition")
+                    needs_wait = True
+            
+            return transitions_needed, needs_wait
 
         with self.console_lock:
             while self.command_queue:
                 command = self.command_queue.pop(0)
                 print(f"Executing: {command}")
+                
+                # Check if we need transitions for movement commands
+                movement_commands = ["forward", "backward", "left", "right", "turn_left", "turn_right", "walk"]
+                needs_transition = command in movement_commands and not self.Free
+                
+                if needs_transition:
+                    transitions, needs_wait = transition_to_neutral()
+                    if needs_wait:
+                        # Re-queue the command to try again later
+                        print(f"Animation in progress, re-queuing '{command}'")
+                        self.command_queue.append(command)
+                        continue
+                    if transitions:
+                        print(f"Command '{command}' requires transition through neutral state")
+                        # Add transitions to the front of the queue
+                        for trans in reversed(transitions):
+                            self.command_queue.insert(0, trans)
+                        # Re-add the original command after transitions
+                        self.command_queue.insert(len(transitions), command)
+                        print(f"Transition sequence: {transitions} -> {command}")
+                        continue  # Process transitions first
 
                 if command == "quit":
                     self.continuer = False
@@ -486,10 +964,17 @@ class SpotMicroController:
                     print(f"IMU compensation: {state}")
                     self.current_action = f"IMU compensation {state}"
 
+                elif command == "photo":
+                    success = self.capture_photo()
+                    if success:
+                        self.current_action = "Photo captured"
+                    else:
+                        self.current_action = "Photo capture failed"
+
                 else:
                     print(f"Unknown command: {command}")
                     print(
-                        "Available commands: walk, sit, lie, twist, pee, stop, forward, backward, left, right, turn_left, turn_right, paw_left, paw_right, paw_down, move, anim, trot, imu, quit")
+                        "Available commands: walk, sit, lie, twist, pee, stop, forward, backward, left, right, turn_left, turn_right, paw_left, paw_right, paw_down, move, anim, trot, imu, photo, quit")
 
 
     # ==================== MAIN ROBOTIC CYCLE ====================
@@ -525,6 +1010,21 @@ class SpotMicroController:
             self.screen.blit(move_text, (10, 70))
 
             self.process_console_commands()
+
+            # ---- Sensor Reading (every 10 frames to reduce overhead) ----
+            if self.frame_counter % 10 == 0:
+                self.read_sensors()
+                
+                # Handle obstacle avoidance
+                if self.walking or hasattr(self, 'avoiding_obstacle') and self.avoiding_obstacle:
+                    self.handle_obstacle_avoidance()
+            
+            # ---- Check paw hold timer ----
+            self.check_paw_hold_timer()
+            
+            # ---- Logging (every 30 frames) ----
+            if self.frame_counter % 30 == 0:
+                self.log_state()
 
             #плавное изменение скорости
             if self.walking and hasattr(self, 'target_speed'):
@@ -1028,6 +1528,7 @@ class SpotMicroController:
             self.pos[15][7] = self.CGabs[2]
 
         print("Shutting down...")
+        self.cleanup()
         pygame.quit()
 
     # ==================== HARDWARE HELPERS ====================
@@ -1336,6 +1837,35 @@ class SpotMicroController:
                         self.kit1.servo[self.Spot.servo_table[current_idx]].angle = smoothed_angle
                     except ValueError:
                         print(f'Angle out of Range for servo {current_idx}')
+    
+    # ==================== CLEANUP ====================
+    
+    def cleanup(self):
+        """Clean up resources on exit"""
+        print("Cleaning up resources...")
+        
+        # Close TCP server
+        if self.tcp_server_socket:
+            try:
+                self.tcp_server_socket.close()
+            except:
+                pass
+        
+        # Stop camera
+        if self.camera and hasattr(self.camera, 'stop'):
+            try:
+                self.camera.stop()
+            except:
+                pass
+        
+        # Clean up GPIO
+        try:
+            GPIO.cleanup()
+        except:
+            pass
+        
+        print("Cleanup complete")
+
 # ======================
 
 #if __name__ == "__main__":
