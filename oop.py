@@ -150,6 +150,7 @@ class SpotMicroController:
         self.cw = 1
         self.walking_speed = 0
         self.walking_direction = 0
+        self.heading_offset = 0
         self.steering = 1e6
         self.temp_start_pos = [0, 0, 0, 0, 0, 0]
         self.pos_sit_init = None
@@ -560,10 +561,10 @@ class SpotMicroController:
                 self.trec = int(self.t) + 1
 
                 # Process movement commands
-                self.DIR_FORWARD = pi / 2
-                self.DIR_BACKWARD = 3 * pi / 2
-                self.DIR_LEFT = pi
-                self.DIR_RIGHT = 0
+                self.DIR_FORWARD = pi / 2 + self.heading_offset
+                self.DIR_BACKWARD = 3 * pi / 2 + self.heading_offset
+                self.DIR_LEFT = pi + self.heading_offset
+                self.DIR_RIGHT = 0 + self.heading_offset
 
                 if self.current_movement_command == "forward":
                     #self.walking_speed = 100  # 0.5
@@ -908,6 +909,7 @@ class SpotMicroController:
                     self.pos_init = [-self.x_offset, self.track, -self.b_height, -self.x_offset, -self.track, -self.b_height, -self.x_offset, -self.track, -self.b_height,
                                 -self.x_offset, self.track, -self.b_height]
                     self.pos[0:12] = self.pos_init  #
+                    self.heading_offset += self.pos[12][2]
                     self.pos[12] = [0, 0, 0, 0, 0, 0]  #
                     self.pos[13] = [0, self.x_offset, self.Spot.xlf, self.Spot.xrf, self.Spot.xrr, self.Spot.xlr, self.pos[13][6], self.pos[13][7], self.pos[13][8],
                                self.pos[13][9]]  # ????? X
