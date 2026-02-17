@@ -770,6 +770,10 @@ class SpotMicroController:
                 self.walking_speed = 0
                 self.current_action = "Walking mode started"
                 print("=== WALKING STARTED ===")
+            elif self.walking and self.stop:
+                # Cancel pending stop if a new movement command is issued while walking
+                self.stop = False
+                print("=== STOP CANCELLED, CONTINUING WALK ===")
 
         def transition_to_neutral():
             """Transition from any state to neutral (standing) position"""
@@ -810,24 +814,32 @@ class SpotMicroController:
 
                 # Check if we need transitions for movement commands
                 movement_commands = ["forward", "backward", "left", "right", "turn_left", "turn_right", "walk"]
-                needs_transition = command in movement_commands and not self.Free
 
-                if needs_transition:
-                    transitions, needs_wait = transition_to_neutral()
-                    if needs_wait:
-                        # Re-queue the command to try again later
-                        print(f"Animation in progress, re-queuing '{command}'")
+                if command in movement_commands:
+                    # If already walking, just change the command directly (no transition needed)
+                    if self.walking:
+                        pass  # Fall through to command processing below
+
+                    # If recovering, re-queue the command to process after recovery completes
+                    elif self.recovering:
+                        print(f"Recovery in progress, re-queuing '{command}'")
                         self.command_queue.append(command)
-                        continue
-                    if transitions:
-                        print(f"Command '{command}' requires transition through neutral state")
-                        # Add transitions to the front of the queue
-                        for trans in reversed(transitions):
-                            self.command_queue.insert(0, trans)
-                        # Re-add the original command after transitions
-                        self.command_queue.insert(len(transitions), command)
-                        print(f"Transition sequence: {transitions} -> {command}")
-                        continue  # Process transitions first
+                        break  # Exit loop, will process next time
+
+                    # If in another non-free state (sitting, lying, etc.), check transitions
+                    elif not self.Free:
+                        transitions, needs_wait = transition_to_neutral()
+                        if needs_wait:
+                            print(f"Animation in progress, re-queuing '{command}'")
+                            self.command_queue.append(command)
+                            continue
+                        if transitions:
+                            print(f"Command '{command}' requires transition through neutral state")
+                            for trans in reversed(transitions):
+                                self.command_queue.insert(0, trans)
+                            self.command_queue.insert(len(transitions), command)
+                            print(f"Transition sequence: {transitions} -> {command}")
+                            continue
 
                 if command == "quit":
                     self.continuer = False

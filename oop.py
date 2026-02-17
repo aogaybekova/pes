@@ -241,11 +241,22 @@ class SpotMicroController:
                 self.walking_speed = 0
                 self.current_action = "Walking mode started"
                 print("=== WALKING STARTED ===")
+            elif self.walking and self.stop:
+                # Cancel pending stop if a new movement command is issued while walking
+                self.stop = False
+                print("=== STOP CANCELLED, CONTINUING WALK ===")
 
         with self.console_lock:
             while self.command_queue:
                 command = self.command_queue.pop(0)
                 print(f"Executing: {command}")
+
+                # Re-queue movement commands if recovery is in progress
+                movement_commands = ["forward", "backward", "left", "right", "turn_left", "turn_right"]
+                if command in movement_commands and self.recovering:
+                    print(f"Recovery in progress, re-queuing '{command}'")
+                    self.command_queue.append(command)
+                    break  # Exit loop, will process next time
 
                 if command == "quit":
                     self.continuer = False
