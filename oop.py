@@ -87,6 +87,7 @@ class SpotMicroController:
         self.pawing = False
         self.recovering = False
         self.peeing = False
+        self.pee_hold_start_time = 0
         self.stop = False
         self.Free = True
         self.lock = False
@@ -452,10 +453,13 @@ class SpotMicroController:
                         self.Free = False
                         self.t = 0
                         self.lock = True
+                        self.pee_hold_start_time = 0
                         self.current_action = "Peeing started"
                     elif self.shifting and not self.stop and not self.lock:
                         self.stop = True
                         self.lock = True
+                        self.Free = False
+                        self.pee_hold_start_time = 0
                         self.current_action = "Stopping pee"
 
                 elif command == "move":
@@ -886,6 +890,17 @@ class SpotMicroController:
                             self.t = 1
                             self.Free = True
                             self.lock = False
+                            self.pee_hold_start_time = time()
+                            print("=== PEE POSITION REACHED, HOLDING FOR 10s ===")
+                    else:
+                        # Auto-return after 10 seconds in pee position
+                        if self.pee_hold_start_time > 0 and (time() - self.pee_hold_start_time) >= 10:
+                            self.stop = True
+                            self.lock = True
+                            self.Free = False
+                            self.pee_hold_start_time = 0
+                            self.current_action = "Pee hold complete, returning to stand"
+                            print("=== PEE HOLD COMPLETE, RETURNING TO STAND ===")
                 else:
                     self.t = self.t - 4 * self.tstep
                     if self.t <= 0:
@@ -893,6 +908,7 @@ class SpotMicroController:
                         self.stop = False
                         self.shifting = False
                         self.Free = True
+                        self.pee_hold_start_time = 0
                         self.current_action = "Shifting completed"
                         print("=== SHIFTING COMPLETED ===")
             elif self.recovering:
