@@ -1178,10 +1178,10 @@ class SpotMicroController:
                 self.trec = int(self.t) + 1
 
                 # Process movement commands
-                self.DIR_FORWARD = pi / 2 + self.heading_offset
-                self.DIR_BACKWARD = 3 * pi / 2 + self.heading_offset
-                self.DIR_LEFT = pi + self.heading_offset
-                self.DIR_RIGHT = 0 + self.heading_offset
+                self.DIR_FORWARD = pi / 2
+                self.DIR_BACKWARD = 3 * pi / 2
+                self.DIR_LEFT = pi
+                self.DIR_RIGHT = 0
 
                 if self.current_movement_command == "forward":
                     #self.walking_speed = 100  # 0.5
@@ -1527,12 +1527,18 @@ class SpotMicroController:
                                 -self.x_offset, self.track, -self.b_height]
                     self.pos[0:12] = self.pos_init  #
                     self.heading_offset += self.pos[12][2]  # preserve heading (theta_spot yaw)
-                    self.pos[12] = [0, 0, 0, 0, 0, 0]  #
-                    self.pos[13] = [0, self.x_offset, self.Spot.xlf, self.Spot.xrf, self.Spot.xrr, self.Spot.xlr, self.pos[13][6], self.pos[13][7], self.pos[13][8],
-                               self.pos[13][9]]  # ????? X
-                    self.pos[14] = [0, 0, self.Spot.ylf + self.track, self.Spot.yrf - self.track, self.Spot.yrr - self.track, self.Spot.ylr + self.track, self.pos[14][6],
-                               self.pos[14][7], self.pos[14][8], self.pos[14][9]]  # ????? Y
-                    self.pos[15] = [0, self.b_height, 0, 0, 0, 0, self.pos[15][6], self.pos[15][7], self.pos[15][8], self.pos[15][9]]  # ????? Z
+                    self.pos[12] = [0, 0, self.heading_offset, 0, 0, 0]
+
+                    # Rotate nominal positions by heading_offset so world-frame is consistent
+                    cos_h = cos(self.heading_offset)
+                    sin_h = sin(self.heading_offset)
+                    nom_x = [0, self.x_offset, self.Spot.xlf, self.Spot.xrf, self.Spot.xrr, self.Spot.xlr]
+                    nom_y = [0, 0, self.Spot.ylf + self.track, self.Spot.yrf - self.track, self.Spot.yrr - self.track, self.Spot.ylr + self.track]
+                    rot_x = [nx * cos_h - ny * sin_h for nx, ny in zip(nom_x, nom_y)]
+                    rot_y = [nx * sin_h + ny * cos_h for nx, ny in zip(nom_x, nom_y)]
+                    self.pos[13] = rot_x + [self.pos[13][6], self.pos[13][7], self.pos[13][8], self.pos[13][9]]
+                    self.pos[14] = rot_y + [self.pos[14][6], self.pos[14][7], self.pos[14][8], self.pos[14][9]]
+                    self.pos[15] = [0, self.b_height, 0, 0, 0, 0, self.pos[15][6], self.pos[15][7], self.pos[15][8], self.pos[15][9]]
 
                 # Calculate center for animation
             self.xc = self.steering * cos(self.walking_direction)
