@@ -347,16 +347,16 @@ class SpotMicroController:
 
     def handle_obstacle_avoidance(self):
         """Handle obstacle avoidance - keep turning until obstacle is clear"""
-        # Only process if we were trying to move forward or are in obstacle avoidance mode
-        if self.current_movement_command != "forward" and not hasattr(self, 'avoiding_obstacle'):
-            return
-    
         # Initialize obstacle avoidance state if not present
         if not hasattr(self, 'avoiding_obstacle'):
             self.avoiding_obstacle = False
             self.avoidance_turn_direction = None
             self.turn_start_time = 0
             self.obstacle_confirmed = False
+
+        # Only process if we were trying to move forward or are in obstacle avoidance mode
+        if self.current_movement_command != "forward" and not self.avoiding_obstacle:
+            return
     
         # Check if obstacle detected
         obstacle_threshold = 30  # cm (actual distance after correction)
@@ -1134,7 +1134,7 @@ class SpotMicroController:
                 self.read_sensors()
 
                 # Handle obstacle avoidance
-                if self.walking or hasattr(self, 'avoiding_obstacle') and self.avoiding_obstacle:
+                if self.walking or (hasattr(self, 'avoiding_obstacle') and self.avoiding_obstacle):
                     self.handle_obstacle_avoidance()
 
             # ---- Check paw hold timer ----
@@ -1178,10 +1178,10 @@ class SpotMicroController:
                 self.trec = int(self.t) + 1
 
                 # Process movement commands
-                self.DIR_FORWARD = pi / 2
-                self.DIR_BACKWARD = 3 * pi / 2
-                self.DIR_LEFT = pi
-                self.DIR_RIGHT = 0
+                self.DIR_FORWARD = pi / 2 + self.heading_offset
+                self.DIR_BACKWARD = 3 * pi / 2 + self.heading_offset
+                self.DIR_LEFT = pi + self.heading_offset
+                self.DIR_RIGHT = 0 + self.heading_offset
 
                 if self.current_movement_command == "forward":
                     #self.walking_speed = 100  # 0.5
@@ -1527,17 +1527,11 @@ class SpotMicroController:
                                 -self.x_offset, self.track, -self.b_height]
                     self.pos[0:12] = self.pos_init  #
                     self.heading_offset += self.pos[12][2]  # preserve heading (theta_spot yaw)
-                    self.pos[12] = [0, 0, self.heading_offset, 0, 0, 0]
-
-                    # Rotate nominal positions by heading_offset so world-frame is consistent
-                    cos_h = cos(self.heading_offset)
-                    sin_h = sin(self.heading_offset)
-                    nom_x = [0, self.x_offset, self.Spot.xlf, self.Spot.xrf, self.Spot.xrr, self.Spot.xlr]
-                    nom_y = [0, 0, self.Spot.ylf + self.track, self.Spot.yrf - self.track, self.Spot.yrr - self.track, self.Spot.ylr + self.track]
-                    rot_x = [nx * cos_h - ny * sin_h for nx, ny in zip(nom_x, nom_y)]
-                    rot_y = [nx * sin_h + ny * cos_h for nx, ny in zip(nom_x, nom_y)]
-                    self.pos[13] = rot_x + [self.pos[13][6], self.pos[13][7], self.pos[13][8], self.pos[13][9]]
-                    self.pos[14] = rot_y + [self.pos[14][6], self.pos[14][7], self.pos[14][8], self.pos[14][9]]
+                    self.pos[12] = [0, 0, 0, 0, 0, 0]  #
+                    self.pos[13] = [0, self.x_offset, self.Spot.xlf, self.Spot.xrf, self.Spot.xrr, self.Spot.xlr, self.pos[13][6], self.pos[13][7], self.pos[13][8],
+                               self.pos[13][9]]
+                    self.pos[14] = [0, 0, self.Spot.ylf + self.track, self.Spot.yrf - self.track, self.Spot.yrr - self.track, self.Spot.ylr + self.track, self.pos[14][6],
+                               self.pos[14][7], self.pos[14][8], self.pos[14][9]]
                     self.pos[15] = [0, self.b_height, 0, 0, 0, 0, self.pos[15][6], self.pos[15][7], self.pos[15][8], self.pos[15][9]]
 
                 # Calculate center for animation
