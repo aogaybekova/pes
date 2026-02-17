@@ -909,7 +909,7 @@ class SpotMicroController:
                     self.pos_init = [-self.x_offset, self.track, -self.b_height, -self.x_offset, -self.track, -self.b_height, -self.x_offset, -self.track, -self.b_height,
                                 -self.x_offset, self.track, -self.b_height]
                     self.pos[0:12] = self.pos_init  #
-                    self.heading_offset += self.pos[12][2]
+                    self.heading_offset += self.pos[12][2]  # preserve heading (theta_spot yaw)
                     self.pos[12] = [0, 0, 0, 0, 0, 0]  #
                     self.pos[13] = [0, self.x_offset, self.Spot.xlf, self.Spot.xrf, self.Spot.xrr, self.Spot.xlr, self.pos[13][6], self.pos[13][7], self.pos[13][8],
                                self.pos[13][9]]  # ????? X
