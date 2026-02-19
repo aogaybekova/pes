@@ -775,15 +775,42 @@ class SpotMicroController:
                 self.current_action = "Walking mode started"
                 print("=== WALKING STARTED ===")
 
-        def needs_stop_for_switch(new_command):
-            """Check if we need to stop and go through neutral before switching to new command"""
-            if not self.walking:
-                return False
-            old = self.current_movement_command
-            if old == new_command:
-                return False  # Same command, no need to stop
-            # Any switch between different movement commands while walking requires stop→recovery→neutral
-            return True
+        def reset_to_neutral():
+            """Immediately reset all walking state to neutral standing position"""
+            self.walking = False
+            self.recovering = False
+            self.stop = False
+            self.lock = False
+            self.Free = True
+            self.t = 0
+            self.walking_speed = 0
+            self.current_movement_command = "stop"
+
+            # Reset leg positions to initial standing
+            self.pos_init = [-self.x_offset, self.track, -self.b_height,
+                             -self.x_offset, -self.track, -self.b_height,
+                             -self.x_offset, -self.track, -self.b_height,
+                             -self.x_offset, self.track, -self.b_height]
+            self.pos[0:12] = self.pos_init
+
+            # Reset body orientation and position
+            self.pos[12] = [0, 0, 0, 0, 0, 0]
+            self.pos[13] = [0, self.x_offset, self.Spot.xlf, self.Spot.xrf, self.Spot.xrr, self.Spot.xlr,
+                            self.pos[13][6], self.pos[13][7], self.pos[13][8], self.pos[13][9]]
+            self.pos[14] = [0, 0, self.Spot.ylf + self.track, self.Spot.yrf - self.track,
+                            self.Spot.yrr - self.track, self.Spot.ylr + self.track,
+                            self.pos[14][6], self.pos[14][7], self.pos[14][8], self.pos[14][9]]
+            self.pos[15] = [0, self.b_height, 0, 0, 0, 0,
+                            self.pos[15][6], self.pos[15][7], self.pos[15][8], self.pos[15][9]]
+
+            # Update spot variables
+            self.theta_spot = self.pos[12]
+            self.x_spot = self.pos[13]
+            self.y_spot = self.pos[14]
+            self.z_spot = self.pos[15]
+
+            self.prev_pos = None
+            print("=== RESET TO NEUTRAL ===")
 
         def transition_to_neutral():
             """Transition from any state to neutral (standing) position"""
@@ -836,16 +863,10 @@ class SpotMicroController:
                 movement_commands = ["forward", "backward", "left", "right", "turn_left", "turn_right", "walk"]
 
                 if command in movement_commands:
-                    # If already walking and switching to a different movement, stop first
-                    if self.walking and needs_stop_for_switch(command):
-                        if not self.stop:
-                            print(f"Switching movement: stopping current walk, then '{command}'")
-                            self.stop = True
-                            self.lock = True
-                            self.tstop = int(self.t)
-                            self.current_movement_command = "stop"
-                        self.command_queue.append(command)
-                        break  # Exit loop, will process after stop→recovery
+                    # If already walking and switching to a different movement, reset to neutral first
+                    if self.walking and self.current_movement_command != command:
+                        print(f"Switching from '{self.current_movement_command}' to '{command}': resetting to neutral")
+                        reset_to_neutral()
 
                     # If already walking with the same command, just continue
                     elif self.walking:
