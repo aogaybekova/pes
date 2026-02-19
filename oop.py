@@ -88,6 +88,7 @@ class SpotMicroController:
         self.recovering = False
         self.peeing = False
         self.pee_hold_start_time = 0
+        self.transition_start_frame = None
         self.stop = False
         self.Free = True
         self.lock = False
@@ -391,7 +392,13 @@ class SpotMicroController:
                     print("*** EMERGENCY STOP ***")
 
                 elif command == "sit":
-                    if not self.sitting and self.Free:
+                    if self.lying and not self.stop and not self.lock:
+                        # Direct transition from lying to sitting
+                        angle_lying = 40 / 180 * pi
+                        x_end_lying = self.Spot.xlr - self.Spot.L2 + self.Spot.L1 * cos(angle_lying) + self.Spot.Lb / 2
+                        z_end_lying = self.Spot.L1 * sin(angle_lying) + self.Spot.d
+                        self.transition_start_frame = [0, 0, 0, x_end_lying, 0, z_end_lying]
+                        self.lying = False
                         self.sitting = True
                         self.stop = False
                         self.Free = False
@@ -400,6 +407,18 @@ class SpotMicroController:
                         self.pawing = False
                         self.joypal = -1
                         self.joypar = -1
+                        self.current_action = "Sitting from lying"
+                        print("=== SITTING FROM LYING (direct) ===")
+                    elif not self.sitting and self.Free:
+                        self.sitting = True
+                        self.stop = False
+                        self.Free = False
+                        self.t = 0
+                        self.lock = True
+                        self.pawing = False
+                        self.joypal = -1
+                        self.joypar = -1
+                        self.transition_start_frame = None
                         self.current_action = "Sitting down"
                         print("=== SITTING DOWN ===")
                     elif self.sitting and not self.stop and not self.lock:
@@ -421,12 +440,29 @@ class SpotMicroController:
 
 
                 elif command == "lie":
-                    if not self.lying and self.Free:
+                    if self.sitting and not self.stop and not self.lock:
+                        # Direct transition from sitting to lying
+                        alpha_sitting = -30 / 180 * pi
+                        x_end_sitting = self.Spot.xlr - self.Spot.L2 + self.Spot.L1 * cos(pi / 3) + self.Spot.Lb / 2 * cos(
+                            -alpha_sitting) - self.Spot.d * sin(-alpha_sitting)
+                        z_end_sitting = self.Spot.L1 * sin(pi / 3) + self.Spot.Lb / 2 * sin(-alpha_sitting) + self.Spot.d * cos(-alpha_sitting)
+                        self.transition_start_frame = [0, alpha_sitting, 0, x_end_sitting, 0, z_end_sitting]
+                        self.sitting = False
                         self.lying = True
                         self.stop = False
                         self.Free = False
                         self.t = 0
                         self.lock = True
+                        self.pawing = False
+                        self.current_action = "Lying from sitting"
+                        print("=== LYING FROM SITTING (direct) ===")
+                    elif not self.lying and self.Free:
+                        self.lying = True
+                        self.stop = False
+                        self.Free = False
+                        self.t = 0
+                        self.lock = True
+                        self.transition_start_frame = None
                         self.current_action = "Lying down"
                     elif self.lying and not self.stop and not self.lock:
                         self.stop = True
@@ -743,7 +779,7 @@ class SpotMicroController:
                 x_end_sitting = self.Spot.xlr - self.Spot.L2 + self.Spot.L1 * cos(pi / 3) + self.Spot.Lb / 2 * cos(
                     -alpha_sitting) - self.Spot.d * sin(-alpha_sitting)
                 z_end_sitting = self.Spot.L1 * sin(pi / 3) + self.Spot.Lb / 2 * sin(-alpha_sitting) + self.Spot.d * cos(-alpha_sitting)
-                start_frame_pos = [0, 0, 0, self.x_offset, 0, self.b_height]
+                start_frame_pos = self.transition_start_frame if self.transition_start_frame else [0, 0, 0, self.x_offset, 0, self.b_height]
                 end_frame_pos = [0, alpha_sitting, 0, x_end_sitting, 0, z_end_sitting]
 
                 # Store initial sitting position for pawing reference
@@ -769,17 +805,19 @@ class SpotMicroController:
                         self.pawing = False
                         self.joypal = -1
                         self.joypar = -1
+                        self.transition_start_frame = None
                         self.current_action = "Standing completed"
                         print("=== STANDING COMPLETED ===")
                 else:
                     if self.t < 1:
-                        # Sitting down - go from standing to sitting position
+                        # Sitting down - go from start position to sitting position
                         self.pos = self.Spot.moving(self.t, start_frame_pos, end_frame_pos, self.pos)
                         self.t = self.t + 4 * self.tstep
                         if self.t >= 1:
                             self.t = 1
                             self.Free = True
                             self.lock = False
+                            self.transition_start_frame = None
                     elif self.t == 1 and self.pawing:
                         L_paw = 2000  #
                         alpha_pawing = -30/90*pi  #
@@ -847,7 +885,7 @@ class SpotMicroController:
                 angle_lying = 40 / 180 * pi
                 x_end_lying = self.Spot.xlr - self.Spot.L2 + self.Spot.L1 * cos(angle_lying) + self.Spot.Lb / 2
                 z_end_lying = self.Spot.L1 * sin(angle_lying) + self.Spot.d
-                start_frame_pos = [0, 0, 0, self.x_offset, 0, self.b_height]
+                start_frame_pos = self.transition_start_frame if self.transition_start_frame else [0, 0, 0, self.x_offset, 0, self.b_height]
                 end_frame_pos = [0, 0, 0, x_end_lying, 0, z_end_lying]
 
                 self.pos = self.Spot.moving(self.t, start_frame_pos, end_frame_pos, self.pos)
@@ -859,6 +897,7 @@ class SpotMicroController:
                             self.t = 1
                             self.Free = True
                             self.lock = False
+                            self.transition_start_frame = None
                 else:
                     self.t = self.t - 3 * self.tstep
                     if self.t <= 0:
@@ -867,6 +906,7 @@ class SpotMicroController:
                         self.lying = False
                         self.Free = True
                         self.lock = False
+                        self.transition_start_frame = None
                         self.current_action = "Standing up completed"
                         print("=== STANDING UP COMPLETED ===")
 
