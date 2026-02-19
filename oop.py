@@ -335,13 +335,9 @@ class SpotMicroController:
 
                 elif command == "stop_walk":
                     if self.walking:
-                        self.stop = True
-                        self.lock = True
-                        self.tstop = int(self.t)
-                        self.current_movement_command = "stop"
-                        self.current_action = "Stopping walk..."
-                        print("=== STOPPING WALK SEQUENCE INITIATED ===")
-                        self.current_action = "Movement stopped, remaining in Walk mode"
+                        reset_to_neutral()
+                        self.current_action = "Walk stopped"
+                        print("=== WALK STOPPED ===")
                     else:
                         print("Not in walking mode.")
 
@@ -382,23 +378,13 @@ class SpotMicroController:
                         print(f"CG стабилизация: {'ВКЛ' if self.cg_stabilization_enabled else 'ВЫКЛ'}")
 
                 elif command == "stop":
-                    # ????? ? ??????????? ????
-                    self.pos_init = [-self.x_offset, self.track, -self.b_height, -self.x_offset, -self.track,
-                                     -self.b_height,
-                                     -self.x_offset, -self.track, -self.b_height, -self.x_offset, self.track,
-                                     -self.b_height]
-                    self.pos[0:12] = self.pos_init
-                    self.recovering = True
-                    self.walking = False
+                    # Full emergency stop with reset to neutral
+                    reset_to_neutral()
                     self.sitting = False
                     self.lying = False
                     self.twisting = False
                     self.shifting = False
                     self.pawing = False
-                    self.stop = False
-                    self.Free = True
-                    self.walking_speed = 0.0
-                    self.current_movement_command = "stop"
                     self.joypal = -1
                     self.joypar = -1
                     self.current_action = "EMERGENCY STOP - All motions stopped"
