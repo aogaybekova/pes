@@ -242,10 +242,16 @@ class SpotMicroController:
                 self.walking_speed = 0
                 self.current_action = "Walking mode started"
                 print("=== WALKING STARTED ===")
-            elif self.walking and self.stop:
-                # Cancel pending stop if a new movement command is issued while walking
-                self.stop = False
-                print("=== STOP CANCELLED, CONTINUING WALK ===")
+
+        def needs_stop_for_switch(new_command):
+            """Check if we need to stop and go through neutral before switching to new command"""
+            if not self.walking:
+                return False
+            old = self.current_movement_command
+            if old == new_command:
+                return False  # Same command, no need to stop
+            # Any switch between different movement commands while walking requires stop→recovery→neutral
+            return True
 
         with self.console_lock:
             while self.command_queue:
@@ -258,6 +264,17 @@ class SpotMicroController:
                     print(f"Recovery in progress, re-queuing '{command}'")
                     self.command_queue.append(command)
                     break  # Exit loop, will process next time
+
+                # If walking and switching to a different movement, stop first and re-queue
+                if command in movement_commands and needs_stop_for_switch(command):
+                    if not self.stop:
+                        print(f"Switching movement: stopping current walk, then '{command}'")
+                        self.stop = True
+                        self.lock = True
+                        self.tstop = int(self.t)
+                        self.current_movement_command = "stop"
+                    self.command_queue.append(command)
+                    break  # Exit loop, will process after stop→recovery
 
                 if command == "quit":
                     self.continuer = False
@@ -575,11 +592,11 @@ class SpotMicroController:
                 self.t = self.t + self.tstep
                 self.trec = int(self.t) + 1
 
-                # Process movement commands
-                self.DIR_FORWARD = pi / 2 + self.heading_offset
-                self.DIR_BACKWARD = 3 * pi / 2 + self.heading_offset
-                self.DIR_LEFT = pi + self.heading_offset
-                self.DIR_RIGHT = 0 + self.heading_offset
+                # Process movement commands (fixed body-frame directions, no heading offset)
+                self.DIR_FORWARD = pi / 2
+                self.DIR_BACKWARD = 3 * pi / 2
+                self.DIR_LEFT = pi
+                self.DIR_RIGHT = 0
 
                 if self.current_movement_command == "forward":
                     #self.walking_speed = 100  # 0.5

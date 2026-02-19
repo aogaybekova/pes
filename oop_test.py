@@ -520,9 +520,12 @@ class SpotMicroController:
         current_time = time()
 
         if self.touch_sequence_step == 0:
-            # First touch: Stop
+            # First touch: Stop (use stop_walk for graceful stop during walking/turning)
             print("Touch sequence: STOP")
-            self.accept_command("stop")
+            if self.walking:
+                self.accept_command("stop_walk")
+            else:
+                self.accept_command("stop")
             self.touch_sequence_step = 1
         elif self.touch_sequence_step == 1 and self.Free:
             # Second touch: Sit
@@ -771,10 +774,16 @@ class SpotMicroController:
                 self.walking_speed = 0
                 self.current_action = "Walking mode started"
                 print("=== WALKING STARTED ===")
-            elif self.walking and self.stop:
-                # Cancel pending stop if a new movement command is issued while walking
-                self.stop = False
-                print("=== STOP CANCELLED, CONTINUING WALK ===")
+
+        def needs_stop_for_switch(new_command):
+            """Check if we need to stop and go through neutral before switching to new command"""
+            if not self.walking:
+                return False
+            old = self.current_movement_command
+            if old == new_command:
+                return False  # Same command, no need to stop
+            # Any switch between different movement commands while walking requires stop→recovery→neutral
+            return True
 
         def transition_to_neutral():
             """Transition from any state to neutral (standing) position"""
@@ -827,8 +836,19 @@ class SpotMicroController:
                 movement_commands = ["forward", "backward", "left", "right", "turn_left", "turn_right", "walk"]
 
                 if command in movement_commands:
-                    # If already walking, just change the command directly (no transition needed)
-                    if self.walking:
+                    # If already walking and switching to a different movement, stop first
+                    if self.walking and needs_stop_for_switch(command):
+                        if not self.stop:
+                            print(f"Switching movement: stopping current walk, then '{command}'")
+                            self.stop = True
+                            self.lock = True
+                            self.tstop = int(self.t)
+                            self.current_movement_command = "stop"
+                        self.command_queue.append(command)
+                        break  # Exit loop, will process after stop→recovery
+
+                    # If already walking with the same command, just continue
+                    elif self.walking:
                         pass  # Fall through to command processing below
 
                     # If recovering, re-queue the command to process after recovery completes
@@ -1203,11 +1223,11 @@ class SpotMicroController:
                 self.t = self.t + self.tstep
                 self.trec = int(self.t) + 1
 
-                # Process movement commands
-                self.DIR_FORWARD = pi / 2 + self.heading_offset
-                self.DIR_BACKWARD = 3 * pi / 2 + self.heading_offset
-                self.DIR_LEFT = pi + self.heading_offset
-                self.DIR_RIGHT = 0 + self.heading_offset
+                # Process movement commands (fixed body-frame directions, no heading offset)
+                self.DIR_FORWARD = pi / 2
+                self.DIR_BACKWARD = 3 * pi / 2
+                self.DIR_LEFT = pi
+                self.DIR_RIGHT = 0
 
                 if self.current_movement_command == "forward":
                     #self.walking_speed = 100  # 0.5
