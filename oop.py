@@ -245,7 +245,7 @@ class SpotMicroController:
                 print("=== WALKING STARTED ===")
 
         def reset_to_neutral():
-            """Immediately reset all walking state to neutral standing position"""
+            """Immediately reset all walking/movement state to neutral standing position"""
             self.walking = False
             self.recovering = False
             self.stop = False
@@ -254,6 +254,8 @@ class SpotMicroController:
             self.t = 0
             self.walking_speed = 0
             self.current_movement_command = "stop"
+            self.heading_offset = 0
+            self.transition_start_frame = None
 
             # Reset leg positions to initial standing
             self.pos_init = [-self.x_offset, self.track, -self.b_height,
@@ -278,7 +280,11 @@ class SpotMicroController:
             self.y_spot = self.pos[14]
             self.z_spot = self.pos[15]
 
+            # Reset filters and interpolation state
             self.prev_pos = None
+            self.filtered_body_x = self.pos[13][1]
+            self.filtered_body_y = self.pos[14][1]
+            self.filtered_body_z = self.pos[15][1]
             print("=== RESET TO NEUTRAL ===")
 
         with self.console_lock:
@@ -293,9 +299,9 @@ class SpotMicroController:
                     self.command_queue.append(command)
                     break  # Exit loop, will process next time
 
-                # If walking and switching to a different command, reset to neutral first
-                if command in movement_commands and self.walking and self.current_movement_command != command:
-                    print(f"Switching from '{self.current_movement_command}' to '{command}': resetting to neutral")
+                # If walking, always reset to neutral before executing any new movement command
+                if command in movement_commands and self.walking:
+                    print(f"New movement command '{command}' while walking: resetting to neutral")
                     reset_to_neutral()
 
                 if command == "quit":
