@@ -173,6 +173,10 @@ class SpotMicroController:
         self.joypar = -1
         self.Bat = 0
 
+        #for shift and pee
+        self.ra_longi = 30#30
+        self.ra_lat = 30#20
+        
         # == filters
         self.anglex_buff = np.zeros(10)
         self.angley_buff = np.zeros(10)
@@ -1317,8 +1321,10 @@ class SpotMicroController:
                     self.cw = 1
 
                 # Execute walking command
+                walk_height = self.b_height + 50
+
                 self.pos = self.Spot.start_walk_stop(self.track, self.x_offset, self.steering, self.walking_direction, self.cw,
-                                           self.walking_speed, self.v_amp, self.height, self.stepl, self.t, self.tstep,
+                                           self.walking_speed, self.v_amp, walk_height, self.stepl, self.t, self.tstep,
                                            self.theta_spot, self.x_spot, self.y_spot, self.z_spot, 3 + self.trans)
                 # Ð main_loop Ð¿Ð¾ÑÐ»Ðµ Ð²ÑÑÐ¸ÑÐ»ÐµÐ½Ð¸Ñ self.pos:
                 if self.prev_pos is None:
