@@ -189,25 +189,25 @@ class Spot:
         t2 = y**2
         t3 = z**2
         t4 = t2+t3
-        t5 = 1/sqrt(t4)
         t6 = L0**2
         t7 = t2+t3-t6
-        t8 = sqrt(t7)
-        t9 = d-t8
         t10 = x**2
-        t11 = t9**2
         t15 = L1**2
         t16 = L2**2
-        t12 = t10+t11-t15-t16
-        t13 = t10+t11
-        t14 = 1/sqrt(t13)
         error = False
         try:
+            t5 = 1/sqrt(t4)
+            t8 = sqrt(t7)
+            t9 = d-t8
+            t11 = t9**2
+            t12 = t10+t11-t15-t16
+            t13 = t10+t11
+            t14 = 1/sqrt(t13)
             theta1 = side*(-pi/2+asin(t5*t8))+asin(t5*y)
             theta2= -asin(t14*x)+asin(L2*t14*sqrt(1/t15*1/t16*t12**2*(-1/4)+1))
             theta3 =-pi + acos(-t12/2/(L1*L2))
             
-        except ValueError:
+        except (ValueError, ZeroDivisionError):
             print ('ValueError IK')
             error = True  
             theta1=90
