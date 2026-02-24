@@ -97,6 +97,7 @@ class SpotMicroController:
         self.sitting = False
         self.lying = False
         self.twisting = False
+        self.twist_queue_count = 0
         self.shifting = False
         self.pawing = False
         self.recovering = False
@@ -932,6 +933,7 @@ class SpotMicroController:
                     self.sitting = False
                     self.lying = False
                     self.twisting = False
+                    self.twist_queue_count = 0
                     self.shifting = False
                     self.pawing = False
                     self.stop = False
@@ -999,6 +1001,15 @@ class SpotMicroController:
                         self.t = 0
                         self.lock = True
                         self.current_action = "Twisting"
+
+                elif command == "twist_3":
+                    if not self.twisting and self.Free:
+                        self.twisting = True
+                        self.Free = False
+                        self.t = 0
+                        self.lock = True
+                        self.twist_queue_count = 2
+                        self.current_action = "Twisting (1/3)"
 
                 elif command == "stab_off":
                     self.cg_stabilization_enabled = False
@@ -1502,7 +1513,12 @@ class SpotMicroController:
                     self.t = 1
                     self.twisting = False
                     self.Free = True
-                    self.current_action = "Twisting completed"
+                    if self.twist_queue_count > 0:
+                        self.twist_queue_count -= 1
+                        self.command_queue.insert(0, "twist")
+                        self.current_action = f"Twisting ({3 - self.twist_queue_count}/3)"
+                    else:
+                        self.current_action = "Twisting completed"
                     print("=== TWISTING COMPLETED ===")
 
                 if self.t < 0.25:
