@@ -364,8 +364,8 @@ class SpotMicroController:
         if self.current_movement_command != "forward" and not self.avoiding_obstacle:
             return
     
-        # Check if obstacle detected
-        obstacle_threshold = 30  # cm (actual distance after correction)
+        # Check if obstacle object detected
+        obstacle_threshold = 20  # cm (actual distance after correction)
         left_blocked = 0 < self.last_left_distance < obstacle_threshold
         right_blocked = 0 < self.last_right_distance < obstacle_threshold
     
@@ -1297,7 +1297,7 @@ class SpotMicroController:
 
                 elif self.current_movement_command == "turn_left":
                     self.walking_speed = 100
-                    self.walking_direction = 0
+                    self.walking_direction = pi/2
                     self.steering = 80  # 1000
                     self.cw = 1
 
@@ -1404,8 +1404,10 @@ class SpotMicroController:
                 x_end_sitting = self.Spot.xlr - self.Spot.L2 + self.Spot.L1 * cos(pi / 3) + self.Spot.Lb / 2 * cos(
                     -alpha_sitting) - self.Spot.d * sin(-alpha_sitting)
                 z_end_sitting = self.Spot.L1 * sin(pi / 3) + self.Spot.Lb / 2 * sin(-alpha_sitting) + self.Spot.d * cos(-alpha_sitting)
+                #start_frame_pos = [0, 0, 0, self.x_offset, 0, self.b_height]
                 start_frame_pos = self.transition_start_frame if self.transition_start_frame else [0, 0, 0, self.x_offset, 0, self.b_height]
                 end_frame_pos = [0, alpha_sitting, 0, x_end_sitting, 0, z_end_sitting]
+
 
                 # Store initial sitting position for pawing reference
                 if (self.t == 1) and (not self.pawing):
@@ -1437,6 +1439,13 @@ class SpotMicroController:
                     if self.t < 1:
                         # Sitting down - go from start position to sitting position
                         self.pos = self.Spot.moving(self.t, start_frame_pos, end_frame_pos, self.pos)
+                                                #test
+                        if self.t > 0.5:  # Начинаем корректировать во второй половине движения
+                            progress = (self.t - 0.5) * 2  # 0 to 1
+                            rear_shin_offset = -45 * progress  # Плавное увеличение от 0 до -30 test for back leg open
+                            self.pos[8] += rear_shin_offset   # Задняя правая нога (Z)
+                            self.pos[11] += rear_shin_offset  # Задняя левая нога (Z)
+                        # test end
                         self.t = self.t + 4 * self.tstep
                         if self.t >= 1:
                             self.t = 1
@@ -1510,11 +1519,20 @@ class SpotMicroController:
                 angle_lying = 40 / 180 * pi
                 x_end_lying = self.Spot.xlr - self.Spot.L2 + self.Spot.L1 * cos(angle_lying) + self.Spot.Lb / 2
                 z_end_lying = self.Spot.L1 * sin(angle_lying) + self.Spot.d
+                #start_frame_pos = self.transition_start_frame if self.transition_start_frame else [0, 0, 0, self.x_offset, 0, self.b_height]
                 start_frame_pos = self.transition_start_frame if self.transition_start_frame else [0, 0, 0, self.x_offset, 0, self.b_height]
                 end_frame_pos = [0, 0, 0, x_end_lying, 0, z_end_lying]
 
                 self.pos = self.Spot.moving(self.t, start_frame_pos, end_frame_pos, self.pos)
-
+                if self.t > 0.3:  # Начинаем корректировать после 30% движения
+                    progress = min((self.t - 0.3) / 0.7, 1.0)  # 0 to 1
+                    shin_z_offset = -40 * progress  # Опускаем все голени на 40мм
+                    self.pos[2] += shin_z_offset    # LF Z
+                    self.pos[5] += shin_z_offset    # RF Z
+                    self.pos[8] += shin_z_offset    # RR Z
+                    self.pos[11] += shin_z_offset   # LR Z
+                    
+                    
                 if self.stop == False:
                     if self.t < 1:
                         self.t = self.t + 3 * self.tstep
