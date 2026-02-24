@@ -93,6 +93,7 @@ class SpotMicroController:
         self.move_flag = True
         self.walking = False
         self.trot = False
+        self._strafe_trot_applied = False
         self.sitting = False
         self.lying = False
         self.twisting = False
@@ -800,6 +801,12 @@ class SpotMicroController:
             self.current_movement_command = "stop"
             self.heading_offset = 0
             self.transition_start_frame = None
+            if self._strafe_trot_applied and not self.trot:
+                self.stepl = self.stepl4
+                self.h_amp = self.h_amp4
+                self.v_amp = self.v_amp4
+                self.tstep = self.tstep4
+                self._strafe_trot_applied = False
 
             # Reset leg positions to initial standing
             self.pos_init = [-self.x_offset, self.track, -self.b_height,
@@ -1315,24 +1322,48 @@ class SpotMicroController:
                     self.walking_direction = self.DIR_FORWARD
                     self.steering = 1e6
                     self.cw = 1
+                    if self._strafe_trot_applied and not self.trot:
+                        self.stepl = self.stepl4
+                        self.h_amp = self.h_amp4
+                        self.v_amp = self.v_amp4
+                        self.tstep = self.tstep4
+                        self._strafe_trot_applied = False
 
                 elif self.current_movement_command == "backward":
                     self.walking_speed = 100
                     self.walking_direction = self.DIR_BACKWARD
                     self.steering = 1e6
                     self.cw = 1
+                    if self._strafe_trot_applied and not self.trot:
+                        self.stepl = self.stepl4
+                        self.h_amp = self.h_amp4
+                        self.v_amp = self.v_amp4
+                        self.tstep = self.tstep4
+                        self._strafe_trot_applied = False
 
                 elif self.current_movement_command == "left":
                     self.walking_speed = 5  # 50
                     self.walking_direction = self.DIR_LEFT
                     self.steering = 1e6
                     self.cw = 1
+                    if not self.trot:
+                        self.stepl = self.stepl2
+                        self.h_amp = self.h_amp2
+                        self.v_amp = self.v_amp2
+                        self.tstep = self.tstep2
+                        self._strafe_trot_applied = True
 
                 elif self.current_movement_command == "right":
                     self.walking_speed = 5  # 50
                     self.walking_direction = self.DIR_RIGHT
                     self.steering = 1e6
                     self.cw = 1
+                    if not self.trot:
+                        self.stepl = self.stepl2
+                        self.h_amp = self.h_amp2
+                        self.v_amp = self.v_amp2
+                        self.tstep = self.tstep2
+                        self._strafe_trot_applied = True
 
                 elif self.current_movement_command == "turn_left":
                     self.walking_speed = 100
@@ -1340,6 +1371,9 @@ class SpotMicroController:
                     self.steering = 60  # 1000
                     #self.h_amp=45
                     self.cw = 1
+                    if self._strafe_trot_applied and not self.trot:
+                        self.h_amp = self.h_amp4
+                    self._strafe_trot_applied = False
                     self.stepl=0.08
                     self.tstep=0.02#self.tstep4
                     self.v_amp=60
@@ -1350,6 +1384,9 @@ class SpotMicroController:
                     self.walking_direction = 0
                     self.steering = 60  # 1000
                     self.cw = -1
+                    if self._strafe_trot_applied and not self.trot:
+                        self.h_amp = self.h_amp4
+                    self._strafe_trot_applied = False
                     self.stepl=0.08
                     self.tstep=0.02#self.tstep4
                     self.v_amp=60
@@ -1360,6 +1397,12 @@ class SpotMicroController:
                     self.walking_direction = 0
                     self.steering = 1e6
                     self.cw = 1
+                    if self._strafe_trot_applied and not self.trot:
+                        self.stepl = self.stepl4
+                        self.h_amp = self.h_amp4
+                        self.v_amp = self.v_amp4
+                        self.tstep = self.tstep4
+                        self._strafe_trot_applied = False
 
                 # Execute walking command
                 walk_height = self.b_height + 50
