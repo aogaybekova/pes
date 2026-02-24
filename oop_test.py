@@ -1409,9 +1409,12 @@ class SpotMicroController:
                         if self.hi_mode and self.hi_from_sitting:
                             hi_speed = 4 * self.tstep
                             wave_amp = 30  # mm offset for last servo bend
-                            # Target keeps z negative throughout to avoid IK dead zone (y²+z² < L0²)
-                            hi_rf_x_target = 80   # extended forward (mm)
-                            hi_rf_z_target = -50  # raised but below shoulder (mm), z stays < 0
+                            # Direct angles approach: same formula as pawing but positive alpha
+                            # so z_target stays negative (no IK dead zone crossing)
+                            alpha_hi = pi / 3
+                            L_hi = 150
+                            hi_rf_x_target = L_hi * cos(alpha_hi)
+                            hi_rf_z_target = -self.Spot.d - L_hi * sin(alpha_hi)
                             self.hi_t += hi_speed
                             if self.hi_phase == 0:
                                 # Phase 0: raise RF paw to hi position
