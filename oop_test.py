@@ -98,6 +98,12 @@ class SpotMicroController:
         self.twisting = False
         self.shifting = False
         self.pawing = False
+        self.hi_mode = False
+        self.hi_phase = 0
+        self.hi_t = 0.0
+        self.hi_from_sitting = False
+        self.hi_rf_init = [0.0, 0.0, 0.0]
+        self.hi_rf_raised = [0.0, 0.0, 0.0]
         self.recovering = False
         self.peeing = False
         self.stop = False
@@ -740,6 +746,7 @@ class SpotMicroController:
         print("BASIC COMMANDS: walk, sit, lie, twist, pee, stop, stand, stop_walk")
         print("MOVEMENT: forward, backward, left, right, turn_left, turn_right")
         print("PAWING: paw_left, paw_right, paw_down (when sitting)")
+        print("GESTURES: hi (raise right front paw and wave, works from sit or stand)")
         print("SETTINGS: move, anim, trot, imu, quit")
         print("=" * 50)
         print("Enter commands below:")
@@ -933,6 +940,10 @@ class SpotMicroController:
                     self.twisting = False
                     self.shifting = False
                     self.pawing = False
+                    self.hi_mode = False
+                    self.hi_phase = 0
+                    self.hi_t = 0.0
+                    self.ztrf = 3
                     self.stop = False
                     self.Free = True
                     self.walking_speed = 0.0
@@ -1088,10 +1099,35 @@ class SpotMicroController:
                     else:
                         self.current_action = "Photo capture failed"
 
+                elif command == "hi":
+                    if self.sitting and self.Free and self.t >= 0.99 and not self.hi_mode:
+                        # From sitting: raise RF paw then wave last servo
+                        self.hi_mode = True
+                        self.hi_from_sitting = True
+                        self.hi_phase = 0
+                        self.hi_t = 0.0
+                        self.Free = False
+                        self.lock = True
+                        self.current_action = "Hi! (sitting)"
+                        print("=== HI COMMAND (sitting) ===")
+                    elif self.Free and not self.sitting and not self.lying and not self.hi_mode:
+                        # From standing: shift body back, raise RF paw, wave, return
+                        self.hi_mode = True
+                        self.hi_from_sitting = False
+                        self.hi_phase = 0
+                        self.hi_t = 0.0
+                        self.hi_rf_init = [self.pos[3], self.pos[4], self.pos[5]]
+                        self.Free = False
+                        self.lock = True
+                        self.current_action = "Hi! (standing)"
+                        print("=== HI COMMAND (standing) ===")
+                    else:
+                        print("Hi command not available in current state.")
+
                 else:
                     print(f"Unknown command: {command}")
                     print(
-                        "Available commands: walk, sit, lie, twist, pee, stop, forward, backward, left, right, turn_left, turn_right, paw_left, paw_right, paw_down, move, anim, trot, imu, photo, quit")
+                        "Available commands: walk, sit, lie, twist, pee, stop, forward, backward, left, right, turn_left, turn_right, paw_left, paw_right, paw_down, hi, move, anim, trot, imu, photo, quit")
 
 
     # ==================== MAIN ROBOTIC CYCLE ====================
@@ -1168,7 +1204,7 @@ class SpotMicroController:
                     self.mouseclick = False
 
             if (not self.walking and not self.sitting and not self.lying and not self.twisting
-                and not self.shifting and not self.pawing) and self.lock:
+                and not self.shifting and not self.pawing and not self.hi_mode) and self.lock:
                 self.lock = False
 
             # ---- Movement logic for different states ----
@@ -1369,6 +1405,48 @@ class SpotMicroController:
                         self.pos[0] = self.pos_sit_init[0] + (L_paw*cos(alpha_pawing)-self.pos_sit_init[0])*(self.joypal+1)/2
                         self.pos[2] = self.pos_sit_init[2] + (-self.Spot.d-L_paw*sin(alpha_pawing)-self.pos_sit_init[2])*(self.joypal+1)/2
 
+                        # Hi animation from sitting: override RF paw and wave last servo
+                        if self.hi_mode and self.hi_from_sitting:
+                            hi_speed = 4 * self.tstep
+                            wave_amp = 30  # mm offset for last servo bend
+                            L_hi = 150  # reachable arm length for hi gesture
+                            alpha_hi = -30/90*pi
+                            hi_rf_x_target = L_hi * cos(alpha_hi)
+                            hi_rf_z_target = -self.Spot.d - L_hi * sin(alpha_hi)
+                            self.hi_t += hi_speed
+                            if self.hi_phase == 0:
+                                # Phase 0: raise RF paw to hi position
+                                t_hi = min(1.0, self.hi_t)
+                                self.pos[3] = self.pos_sit_init[3] + (hi_rf_x_target - self.pos_sit_init[3]) * t_hi
+                                self.pos[5] = self.pos_sit_init[5] + (hi_rf_z_target - self.pos_sit_init[5]) * t_hi
+                                if self.hi_t >= 1.0:
+                                    self.hi_phase = 1
+                                    self.hi_t = 0.0
+                            elif self.hi_phase == 1:
+                                # Phase 1: bend last servo once via ztrf wave
+                                self.pos[3] = hi_rf_x_target
+                                self.pos[5] = hi_rf_z_target
+                                self.ztrf = 3 + wave_amp * sin(pi * self.hi_t)
+                                if self.hi_t >= 1.0:
+                                    self.ztrf = 3
+                                    self.hi_phase = 2
+                                    self.hi_t = 0.0
+                            elif self.hi_phase == 2:
+                                # Phase 2: lower RF paw back to sitting init position
+                                t_hi = min(1.0, self.hi_t)
+                                self.pos[3] = hi_rf_x_target + (self.pos_sit_init[3] - hi_rf_x_target) * t_hi
+                                self.pos[5] = hi_rf_z_target + (self.pos_sit_init[5] - hi_rf_z_target) * t_hi
+                                if self.hi_t >= 1.0:
+                                    self.pos[3] = self.pos_sit_init[3]
+                                    self.pos[5] = self.pos_sit_init[5]
+                                    self.ztrf = 3
+                                    self.hi_mode = False
+                                    self.hi_phase = 0
+                                    self.hi_t = 0.0
+                                    self.Free = True
+                                    self.lock = False
+                                    self.current_action = "Hi completed"
+                                    print("=== HI COMPLETED ===")
 
                         # ---- IK ??? ???????? ??? ----
                         self.thetarf = self.Spot.IK(self.Spot.L0, self.Spot.L1, self.Spot.L2, self.Spot.d,
@@ -1500,6 +1578,56 @@ class SpotMicroController:
                         self.Free = True
                         self.current_action = "Shifting completed"
                         print("=== SHIFTING COMPLETED ===")
+            elif self.hi_mode and not self.hi_from_sitting:
+                # Standing hi animation: shift body back + raise RF paw + wave last servo + return
+                hi_speed = 4 * self.tstep
+                wave_amp = 30  # mm offset for last servo bend
+                hi_rf_x_target = 60   # mm forward from body center
+                hi_rf_z_target = -90  # mm below body (raised from -220)
+                start_frame_pos = [0, 0, 0, self.x_offset, 0, self.b_height]
+                end_frame_pos = [0, 0, 0, self.x_offset - 30, 0, self.b_height]  # shift backward 30mm
+                self.hi_t += hi_speed
+                if self.hi_phase == 0:
+                    # Phase 0: shift body backward + raise RF paw
+                    t_hi = min(1.0, self.hi_t)
+                    self.pos = self.Spot.moving(t_hi, start_frame_pos, end_frame_pos, self.pos)
+                    self.pos[3] = self.hi_rf_init[0] + (hi_rf_x_target - self.hi_rf_init[0]) * t_hi
+                    self.pos[4] = self.hi_rf_init[1]
+                    self.pos[5] = self.hi_rf_init[2] + (hi_rf_z_target - self.hi_rf_init[2]) * t_hi
+                    if self.hi_t >= 1.0:
+                        self.hi_rf_raised = [self.pos[3], self.pos[4], self.pos[5]]
+                        self.hi_phase = 1
+                        self.hi_t = 0.0
+                elif self.hi_phase == 1:
+                    # Phase 1: bend last servo once via ztrf wave (body stays shifted)
+                    self.pos = self.Spot.moving(1.0, start_frame_pos, end_frame_pos, self.pos)
+                    self.pos[3] = self.hi_rf_raised[0]
+                    self.pos[4] = self.hi_rf_raised[1]
+                    self.pos[5] = self.hi_rf_raised[2]
+                    self.ztrf = 3 + wave_amp * sin(pi * self.hi_t)
+                    if self.hi_t >= 1.0:
+                        self.ztrf = 3
+                        self.hi_phase = 2
+                        self.hi_t = 0.0
+                elif self.hi_phase == 2:
+                    # Phase 2: lower RF paw + shift body back to normal
+                    t_hi = min(1.0, self.hi_t)
+                    self.pos = self.Spot.moving(1.0 - t_hi, start_frame_pos, end_frame_pos, self.pos)
+                    self.pos[3] = self.hi_rf_raised[0] + (self.hi_rf_init[0] - self.hi_rf_raised[0]) * t_hi
+                    self.pos[4] = self.hi_rf_raised[1]
+                    self.pos[5] = self.hi_rf_raised[2] + (self.hi_rf_init[2] - self.hi_rf_raised[2]) * t_hi
+                    if self.hi_t >= 1.0:
+                        self.pos[3] = self.hi_rf_init[0]
+                        self.pos[4] = self.hi_rf_init[1]
+                        self.pos[5] = self.hi_rf_init[2]
+                        self.ztrf = 3
+                        self.hi_mode = False
+                        self.hi_phase = 0
+                        self.hi_t = 0.0
+                        self.Free = True
+                        self.lock = False
+                        self.current_action = "Hi completed"
+                        print("=== HI COMPLETED ===")
             elif self.recovering:
                 # print(f"Recover t={t}, stance={stance}, transtep={transtep}")
                 # (Stand/Initial position)
