@@ -5,15 +5,17 @@ import pyaudio
 import threading
 import time
 from vosk import Model, KaldiRecognizer
-from oop3 import SpotMicroController
+from oop_test_to_neutral0 import SpotMicroController
+#from oop_test import SpotMicroController
 
+# === Settings ===
 MODEL_PATH = "/home/rpi/sr_model/vosk-model-small-ru-0.22/"  
 SAMPLE_RATE = 16000
 CHUNK_SIZE = 4096
 FORMAT = pyaudio.paInt16
 CHANNELS = 1
 
-# Маппинг фраз & команд Spot
+# Маппинг распознанных фраз в команды Spot
 VOICE_COMMANDS = {
     "вперёд": "forward",
     "перёд": "forward", 
@@ -30,14 +32,17 @@ VOICE_COMMANDS = {
     "остановка":"stop_walk",
     "установка":"stop_walk",
     "асанов":"stop_walk",
-
+    "привет":"hi",
     "дай лапу": "paw_right",
     "правую лапу": "paw_right",
     "левую лапу": "paw_left",
     "левая ладно": "paw_left",
     "опустил ладно": "paw_down",
-
     "опусти лапы": "paw_down",
+    "опусти лапу": "paw_down",
+    "опустил лапу": "paw_down",
+
+    "опустил лапы": "paw_down",
     "опустела": "paw_down",
     "опустила": "paw_down",
     "блядь": "stop",
@@ -45,10 +50,16 @@ VOICE_COMMANDS = {
     "пусти лапы": "paw_down",
     "остановить": "stop_walk",
     "собачье дело": "pee",
+    "собачьи дела": "pee",
+    "собачи дела": "pee",
     "встряхнуться": "twist",
+    "встряхнись": "twist",
+    "хороший мальчик": "twist",
+    "хвост": "twist",
     "сесть": "sit",
     "сидеть": "sit",
     "лечь": "lie",
+    "лежать": "lie",
     "восстать": "stand",
     "встать": "stand",
     "стать": "stand",
@@ -134,24 +145,25 @@ if __name__ == "__main__":
     print(f"Python version: {sys.version}")
     print(f"Working directory: {os.getcwd()}")
     
-    # test доступности I2C
+    # Проверка доступности I2C
     try:
         import board
         print(" I2C доступен")
     except Exception as e:
         print(f" I2C недоступен: {e}")
     
-    # init контроллер
+    # Создаем контроллер
     controller = SpotMicroController()
     print("=== Controller created ===")
     
-    # start голосовое управление в отдельном потоке
+    # Запускаем голосовое управление в отдельном потоке
     voice_th = threading.Thread(target=voice_thread, args=(controller,), daemon=True)
     voice_th.start()
     
+    # Даем время на инициализацию голосового управления
     time.sleep(3)
     
-    # жив ли поток
+    # Проверяем, жив ли поток
     if voice_th.is_alive():
         print(" Голосовой поток активен")
         print(" Теперь можете говорить команды...")
