@@ -1,2074 +1,573 @@
-#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-import os
-import threading
-import queue
+from math import pi, sin, cos, asin, acos, atan2, sqrt
 import numpy as np
-import copy
-from math import pi, sin, cos, atan, sqrt, radians
-from time import sleep, time
-import csv
-import socket
-from datetime import datetime
-
-# External dependencies
-import pygame
-import board
-import busio
-import adafruit_pca9685
-import adafruit_mpu6050
-#import mpu6050 #import mpu6050
-from adafruit_servokit import ServoKit
-import RPi.GPIO as GPIO
-
-# Camera imports
-try:
-    from picamera2 import Picamera2
-    import cv2
-    CAMERA_AVAILABLE = True
-except ImportError:
-    CAMERA_AVAILABLE = False
-    print("Warning: Picamera2 or OpenCV not available. Camera functionality disabled.")
-
-# SpotMicro-specific imports
-import Spotmicro_lib_020
-import Spotmicro_Gravity_Center_lib_007
-import Spotmicro_Animate_lib_009
-
-print("=== Script started ===")
-# ==================== CLASS CONTROLLER ====================
-
-class SpotMicroController:
-    def __init__(self):
-        print("=== Controller __init__ started ===")
-
-        # == Core robot modules and helpers
-        self.Spot = Spotmicro_lib_020.Spot()
-        self.SpotCG = Spotmicro_Gravity_Center_lib_007.SpotCG()
-        self.anim = Spotmicro_Animate_lib_009.SpotAnim()
-
-        # == PWM & hardware
-        self.i2c= busio.I2C(board.SCL, board.SDA)
-        self.pca = adafruit_pca9685.PCA9685(self.i2c)
-        self.mpu = adafruit_mpu6050.MPU6050(self.i2c)
-        self.pca.frequency = 50
-        self.kit0 = ServoKit(address=0x40, channels=16)
-        self.kit1 = ServoKit(address=0x41, channels=16)
-        for i in range(0, 6):
-            self.kit0.servo[self.Spot.servo_table[i]].set_pulse_width_range(500, 2500)
-        for i in range(6, 12):
-            self.kit1.servo[self.Spot.servo_table[i]].set_pulse_width_range(500, 2500)
-        #self.mpu = mpu6050.MPU6050(0x68, bus=1)
-
-        # == Display
-        # ÐÑÐºÐ»ÑÑÐ°ÐµÐ¼ Ð°Ð¿Ð¿Ð°ÑÐ°ÑÐ½Ð¾Ðµ ÑÑÐºÐ¾ÑÐµÐ½Ð¸Ðµ Ð´Ð»Ñ Ð¸Ð·Ð±ÐµÐ¶Ð°Ð½Ð¸Ñ Ð¿ÑÐ¾Ð±Ð»ÐµÐ¼ Ñ OpenGL
-        os.environ['SDL_VIDEO_X11_NOWINDOWMOVE'] = '1'
-        pygame.init()
-        print("=== Controller __init__ END ===")
-
-        # ÐÑÐ¿ÑÐ°Ð²Ð»ÑÐµÐ¼ Ð¸Ð½Ð¸ÑÐ¸Ð°Ð»Ð¸Ð·Ð°ÑÐ¸Ñ Ð´Ð¸ÑÐ¿Ð»ÐµÑ
-        self.screen = pygame.display.set_mode((600, 600))
-        pygame.display.set_caption("SPOTMICRO CONSOLE CONTROL")
-
-        # Ð¦Ð²ÐµÑÐ° Ð´Ð»Ñ Ð¸Ð½ÑÐµÑÑÐµÐ¹ÑÐ°
-        self.BLACK = (0, 0, 0)
-        self.WHITE = (255, 255, 255)
-        self.RED = (255, 0, 0)
-        self.GREEN = (0, 255, 0)
-        self.BLUE = (0, 0, 255)
-
-        self.smallfont = pygame.font.SysFont('Corbel', 20)
-        self.text_animon = self.smallfont.render('Anim On', True, self.BLACK)
-        self.text_animoff = self.smallfont.render('Anim Off', True, self.WHITE)
-        self.text_moveon = self.smallfont.render('Move On', True, self.BLACK)
-        self.text_moveoff = self.smallfont.render('Move Off', True, self.WHITE)
-
-        # == Command/state management
-        self.command_queue = []
-        self.console_lock = threading.Lock()
-
-        # == Main state
-        self.anim_flag = False
-        self.move_flag = True
-        self.walking = False
-        self.trot = False
-        self.sitting = False
-        self.lying = False
-        self.twisting = False
-        self.shifting = False
-        self.pawing = False
-        self.recovering = False
-        self.peeing = False
-        self.pee_hold_start_time = 0
-        self.transition_start_frame = None
-        self.stop = False
-        self.Free = True
-        self.lock = False
-        self.move = True
-        self.lockmouse = False
-        self.mouseclick = False
-        self.IMU_Comp = False
 
 
-        # == Walking params
-        self.b_height = 220
-        self.x_offset = 0
-        self.track2, self.track4 = 58, 58  # Ð¨Ð¸ÑÐ¸Ð½Ð° Ð¿Ð¾ÑÑÐ°Ð½Ð¾Ð²ÐºÐ¸ Ð½Ð¾Ð³ (Y-ÐºÐ¾Ð¾ÑÐ´Ð¸Ð½Ð°ÑÐ°)
-        self.h_amp2, self.h_amp4 = 100, 60 #80  # ÐÐ¾ÑÐ¸Ð·Ð¾Ð½ÑÐ°Ð»ÑÐ½Ð°Ñ Ð°Ð¼Ð¿Ð»Ð¸ÑÑÐ´Ð° Ð´Ð²Ð¸Ð¶ÐµÐ½Ð¸Ñ Ð½Ð¾Ð³ (X-Ð½Ð°Ð¿ÑÐ°Ð²Ð»ÐµÐ½Ð¸Ðµ)
-        self.v_amp2, self.v_amp4 = 20, 45 #25 # ÐÐµÑÑÐ¸ÐºÐ°Ð»ÑÐ½Ð°Ñ Ð°Ð¼Ð¿Ð»Ð¸ÑÑÐ´Ð° Ð¿Ð¾Ð´ÑÐµÐ¼Ð° Ð½Ð¾Ð³ (Z-Ð½Ð°Ð¿ÑÐ°Ð²Ð»ÐµÐ½Ð¸Ðµ)
-        #Ð´Ð»Ð¸Ð½a ÑÐ°Ð³Ð°
-        self.stepl2, self.stepl4 = 0.16, 0.125 #was 0.2#08#0.125 # Ð¡ÐÐÐ ÐÐ¡Ð¢Ð¬ ÐÐÐ ÐÐÐÐ©ÐÐÐÐ¯ Ð¢ÐÐÐ
-        self.tstep2, self.tstep4 = self.stepl2 / 8, 0.015 #0.8 #0.012 #6666666666 # Ð²ÑÐµÐ¼Ñ ÑÐ°Ð³Ð°
-        self.track = self.track4
-        self.h_amp = self.h_amp4
-        self.v_amp = self.v_amp4
-        self.stepl = self.stepl4
-        self.tstep = self.tstep4
-        self.height = self.b_height
-        self.prev_pos = None
-        self.animation_smoothing = 0.5  # ÐÐ¾ÑÑÑÐ¸ÑÐ¸ÐµÐ½Ñ ÑÐ³Ð»Ð°Ð¶Ð¸Ð²Ð°Ð½Ð¸Ñ (0-1)
-        self.target_speed = 0
-        self.t = 0
-        self.transtep = 0.0125
-        self.trans = 0
-        self.tstop = 1000
-        self.current_movement_command = "stop"
-        self.current_servo_angles = [0.0] * 12
-        self.speed_smoothing = 0.3
-        # ÐÐ°ÑÐ°Ð¼ÐµÑÑÑ ÑÑÐ°Ð±Ð¸Ð»Ð¸Ð·Ð°ÑÐ¸Ð¸
-        self.cg_stabilization_enabled = True
-        self.imu_stabilization_enabled = True  # ÐÐ¾Ð±Ð°Ð²Ð»ÑÐµÐ¼ Ð¾ÑÐ´ÐµÐ»ÑÐ½ÑÐ¹ ÑÐ»Ð°Ð³ Ð´Ð»Ñ IMU
+class Spot:
+    """ Servos Settings """
+    """ rotation direction """
+    dir01 = -1
+    dir02 = 1
+    dir03 = 1
+    dir04 = -1
+    dir05 = -1
+    dir06 = -1
+    dir07 = 1
+    dir08 = -1
+    dir09 = -1
+    dir10 = 1
+    dir11 = 1
+    dir12 = 1
+    
+    """ zero position in µs """
+     
+    angle_scale_factor_lf1 = 1.12
+    angle_scale_factor_lf2 = 1.12
+    angle_scale_factor_lf3 = 1.12 #1.12 ( zero = 170)
 
-        # ÐÐ¾Ð»ÐµÐµ ÐºÐ¾Ð½ÑÐµÑÐ²Ð°ÑÐ¸Ð²Ð½ÑÐµ Ð¿Ð°ÑÐ°Ð¼ÐµÑÑÑ ÑÑÐ°Ð±Ð¸Ð»Ð¸Ð·Ð°ÑÐ¸Ð¸
-        self.max_cg_offset_x = 10  # Ð£Ð¼ÐµÐ½ÑÑÐµÐ½Ð¾ Ñ 15
-        self.max_cg_offset_y = 8   # Ð£Ð¼ÐµÐ½ÑÑÐµÐ½Ð¾ Ñ 10
-        self.max_leg_adjustment = 20  # ÐÐ°ÐºÑÐ¸Ð¼Ð°Ð»ÑÐ½Ð°Ñ ÐºÐ¾ÑÑÐµÐºÑÐ¸ÑÐ¾Ð²ÐºÐ° Ð½Ð¾Ð³Ð¸ (Ð¼Ð¼)
+    angle_scale_factor_rf1 = 1.12
+    angle_scale_factor_rf2 = 1.12
+    angle_scale_factor_rf3 = 1.12 #1.06 (zero = 0)
 
-        # ÐÐ»Ð°Ð²Ð½Ð°Ñ ÑÐ¸Ð»ÑÑÑÐ°ÑÐ¸Ñ
-        self.body_filter_alpha = 0.2  # ÐÐ¾Ð»ÐµÐµ ÑÐ¸Ð»ÑÐ½Ð¾Ðµ ÑÐ³Ð»Ð°Ð¶Ð¸Ð²Ð°Ð½Ð¸Ðµ
-        self.leg_filter_alpha = 0.3   # Ð¤Ð¸Ð»ÑÑÑ Ð´Ð»Ñ Ð½Ð¾Ð³
+    angle_scale_factor_rr1 = 1.12
+    angle_scale_factor_rr2 = 1.12
+    angle_scale_factor_rr3 = 1.12 #1.12 (zero = 7)
+       
+    angle_scale_factor_lr1 = 1.12
+    angle_scale_factor_lr2 = 1.12   
+    angle_scale_factor_lr3 = 1.12 #1.11 (zero = 167)
+    
+    # FL_clav: 95 - 8 = 87
+    zero01 = 94
+    # FL_hum: 97 - 15 = 82
+    zero02 = 74
+    # FL_rad: (75 + 3)
+    zero03 = 78 + 90* angle_scale_factor_lf3 #was 69
+    # FR_clav: 91 + 2 = 93
+    zero04 = 105
+    # FR_hum: 90 + 0 = 90
+    zero05 = 110
+    # FR_rad: 89 
+    zero06 = 98 - 90* angle_scale_factor_rf3 #was 95
+    # BR_clav: 92 + 0 = 92
+    zero07 = 95
+    # BR_hum: 81 + 0 = 81
+    zero08 = 90
+    # BR_rad: 102
+    zero09 = 75- 90* angle_scale_factor_rr3 # was 108
+    # BL_clav: 96
+    zero10 = 104
+    # BL_hum: 94
+    zero11 = 54
+    # BL_rad: 73
+    zero12 = 62 + 90* angle_scale_factor_lr3 #was 67
+       
 
-        # ÐÐ½Ð¸ÑÐ¸Ð°Ð»Ð¸Ð·Ð°ÑÐ¸Ñ ÑÐ¸Ð»ÑÑÑÐ¾Ð²
-        self.filtered_body_x = 0
-        self.filtered_body_y = 0
-        self.filtered_body_z = self.b_height
-        self.filtered_leg_positions = [0.0] * 12
-
-
-        # == Kinematics/pose
-        self.xtlf = self.xtrf = self.xtrr = self.xtlr = 14
-        self.ytlf = self.ztlf = self.ytrf = self.ytrr = self.ytlr = self.ztlr = 0
-        self.ztrf = 3
-        self.ztrr = 0
-        self.stance = [True] * 4
-        self.cw = 1
-        self.walking_speed = 0
-        self.walking_direction = 0
-        self.heading_offset = 0
-        self.steering = 1e6
-        self.temp_start_pos = [0, 0, 0, 0, 0, 0]
-        self.pos_sit_init = None
-        self.joypal = -1
-        self.joypar = -1
-        self.Bat = 0
-
-        #for shift and pee
-        self.ra_longi = 30#30
-        self.ra_lat = 30#20
+    """" Spotmicro dimensions """
+    Wb = 78 #Shoulder/hip width
+    Lb = 187.1 #Shoulder to hip length
+    L0 = 58.09 #Shoulder articulation width
+    d = 10.73 #Shoulder articulation height
+    L1 = 108.31 #Leg length
+    L2 = 138 #Foreleg length
+    
+    """ Anchor points """
+    
+    """ Front left shoulder"""
+    xlf = 93.55
+    ylf = 39
+    zlf = 0
+    
+    """Front right shoulder"""
+    xrf = 93.55
+    yrf = -39
+    zrf = 0
+    
+    """Rear  left hip """
+    xlr = -93.55
+    ylr = 39
+    zlr = 0
+    
+    """Rear right hip """
+    xrr = -93.55
+    yrr = -39
+    zrr = 0
+    
+    
+    """Inertia Centers"""
+    
+    """ Body"""
+    xCG_Body = 11.32 # taking into account 82g at + 140 mm + 65 g (at 0 mm)
+    yCG_Body = 0
+    zCG_Body = 0
+    Weight_Body = 1044 #including 65g back + 82g front (at + 140 mm)
+    
+    """ Left Shoulder """
+    xCG_Shoulder = 0
+    yCG_Shoulder = 5 #sign to be changed for right leg
+    zCG_Shoulder = -9
+    Weight_Shoulder = 99.3
+    
+    """ Left Leg """
+    xCG_Leg = 0
+    yCG_Leg = 0 #sign to be changed for right leg
+    zCG_Leg = -31
+    Weight_Leg = 133.3
+    
+    """ Left Leg """
+    xCG_Foreleg = 0
+    yCG_Foreleg = 0 #sign to be changed for right leg
+    zCG_Foreleg = -28
+    Weight_Foreleg = 107
+    
+    
+    phase = pi/8 # optimum position when leg is fully lifted
         
-        # == filters
-        self.anglex_buff = np.zeros(10)
-        self.angley_buff = np.zeros(10)
-        self.zeroangle_x = 0.0338
-        self.zeroangle_y = -0.0594
-        self.iangle = 0
-        self.angle_count = 1
-        self.Tcomp = 0.02
-        self.angle = np.zeros(2)
-        self.Angle = np.zeros(2)
-        self.Angle_old = np.zeros(2)
-        self.Integral_Angle = [0, 0]
+    servo_table = [4,5,6,0,1,2,8,9,10,12,13,14]
 
-        # == Positions (body, legs)
-        self.pos_init = [-self.x_offset, self.track4, -self.b_height, -self.x_offset, -self.track4, -self.b_height,
-                         -self.x_offset, -self.track4, -self.b_height, -self.x_offset, self.track4, -self.b_height]
-        self.x_spot = [0, self.x_offset, self.Spot.xlf, self.Spot.xrf, self.Spot.xrr, self.Spot.xlr, 0, 0, 0, 0]
-        self.y_spot = [0, 0, self.Spot.ylf + self.track4, self.Spot.yrf - self.track4, self.Spot.yrr - self.track4,
-                       self.Spot.ylr + self.track4, 0, 0, 0, 0]
-        self.z_spot = [0, self.b_height, 0, 0, 0, 0, 0, 0, 0, 0]
-        self.theta_spot = [0, 0, 0, 0, 0, 0]
-        self.pos = self.pos_init + [self.theta_spot, self.x_spot, self.y_spot, self.z_spot]
-        self.tstart = 1
-
-        # == GUI and control loop
-        self.continuer = True
-        self.clock = pygame.time.Clock()
-        self.current_action = "Ready"
-
-        # == Sensor Configuration ==
-        # HC-SR04 Ultrasonic sensors (left and right)
-        GPIO.setmode(GPIO.BCM)
-        GPIO.setwarnings(False)
-
-        # Left sensor
-        self.TRIG_LEFT = 14  # BCM14
-        self.ECHO_LEFT = 15  # BCM15
-
-        # Right sensor
-        self.TRIG_RIGHT = 23  # BCM23
-        self.ECHO_RIGHT = 24  # BCM24
-
-        # Touch sensor
-        self.TOUCH_PIN = 17  # BCM17
-
-        # Setup sensor pins
-        GPIO.setup(self.TRIG_LEFT, GPIO.OUT)
-        GPIO.setup(self.ECHO_LEFT, GPIO.IN)
-        GPIO.setup(self.TRIG_RIGHT, GPIO.OUT)
-        GPIO.setup(self.ECHO_RIGHT, GPIO.IN)
-        GPIO.setup(self.TOUCH_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-
-        # Initialize ultrasonic triggers
-        GPIO.output(self.TRIG_LEFT, False)
-        GPIO.output(self.TRIG_RIGHT, False)
-
-        # Sensor angle correction (sensors tilted ~40 degrees)
-        # Measured 40cm shows actual 30cm distance, so correction factor is cos(40Â°)
-        self.sensor_tilt_angle = 40  # degrees
-        self.sensor_correction_factor = cos(radians(self.sensor_tilt_angle))  # ~0.766
-
-        # Sensor state
-        self.last_left_distance = -1
-        self.last_right_distance = -1
-        self.obstacle_detected = False
-        self.touch_detected = False
-        self.last_touch_time = 0
-        self.touch_sequence_step = 0  # 0: none, 1: stopped, 2: sitting, 3: paw given
-        self.paw_hold_start_time = 0  # Timer for holding paw
-        self.paw_holding = False  # Flag for 10-second paw hold
-
-        # == Camera Setup ==
-        self.camera = None
-        if CAMERA_AVAILABLE:
-            try:
-                self.camera = Picamera2()
-                camera_config = self.camera.create_still_configuration()
-                self.camera.configure(camera_config)
-                print("Camera initialized successfully")
-            except Exception as e:
-                print(f"Warning: Could not initialize camera: {e}")
-                self.camera = None
-
-        # Create photos directory
-        self.photos_dir = "/home//rpi//Desktop//ik//photos"
-        os.makedirs(self.photos_dir, exist_ok=True)
-
-        # == RL Environment Logging ==
-        self.log_file = "/home//rpi//Desktop//ik//rl_environment_log.csv"
-        self.init_logging()
-
-        # == TCP Server for App Control ==
-        self.tcp_server_socket = None
-        self.tcp_port = 5000
-        self.tcp_enabled = True
-        self.start_tcp_server()
-
-    # ==================== PRIMARY INTERFACE ====================
-
-    def accept_command(self, command):
-        with self.console_lock:
-            self.command_queue.append(command)
-
-    def start_console_thread(self):
-        print('=== Console thread started ===')
-
-        th = threading.Thread(target=self.console_input_thread, daemon=True)
-        th.start()
-
-    def start(self):
-        self.start_console_thread()
-        self.main_loop()
-
-    # ==================== SENSOR METHODS ====================
-
-    def measure_distance(self, trig_pin, echo_pin):
-        """Measure distance using HC-SR04 ultrasonic sensor with angle correction"""
-        try:
-            GPIO.output(trig_pin, True)
-            sleep(0.00001)
-            GPIO.output(trig_pin, False)
-
-            # Wait for echo to go high
-            timeout_start = time() + 0.04
-            pulse_start = time()
-
-            while GPIO.input(echo_pin) == 0:
-                pulse_start = time()
-                if pulse_start > timeout_start:
-                    return -1
-
-            # Wait for echo to go low
-            timeout_end = time() + 0.04
-            pulse_end = time()
-
-            while GPIO.input(echo_pin) == 1:
-                pulse_end = time()
-                if pulse_end > timeout_end:
-                    return -1
-
-            elapsed_time = pulse_end - pulse_start
-            measured_distance_cm = elapsed_time * 17150
-
-            # Apply angle correction for tilted sensors (~40 degrees)
-            # actual_distance = measured_distance * cos(40Â°)
-            actual_distance_cm = measured_distance_cm * self.sensor_correction_factor
-
-            # Filter valid range
-            if 2.0 <= actual_distance_cm <= 400.0:
-                return actual_distance_cm
-            return -1
-        except Exception as e:
-            print(f"Error measuring distance: {e}")
-            return -1
-
-    def read_sensors(self):
-        """Read all sensors and update state"""
-        # Read ultrasonic sensors
-        self.last_left_distance = self.measure_distance(self.TRIG_LEFT, self.ECHO_LEFT)
-        sleep(0.01)  # Small delay between sensors
-        self.last_right_distance = self.measure_distance(self.TRIG_RIGHT, self.ECHO_RIGHT)
-
-        # Read touch sensor (with pull-up: LOW=touched, HIGH=not touched)
-        touch_state = GPIO.input(self.TOUCH_PIN)
-        current_time = time()
-
-        # Detect touch event (transition to touched - LOW with pull-up)
-        if touch_state == 0 and not self.touch_detected:
-            self.touch_detected = True
-            self.last_touch_time = current_time
-            self.handle_touch_event()
-        elif touch_state == 1:
-            self.touch_detected = False
-
-    def handle_obstacle_avoidance(self):
-        """Handle obstacle avoidance - keep turning until obstacle is clear"""
-        # Initialize obstacle avoidance state if not present
-        if not hasattr(self, 'avoiding_obstacle'):
-            self.avoiding_obstacle = False
-            self.avoidance_turn_direction = None
-            self.turn_start_time = 0
-            self.obstacle_confirmed = False
-
-        # Only process if we were trying to move forward or are in obstacle avoidance mode
-        if self.current_movement_command != "forward" and not self.avoiding_obstacle:
-            return
+    def interp(x1,x2,steps):
+        out = np.zeros(steps)
+        for i in range (steps):
+            out[i] = x1 +(x2-x1)/(steps-1)*i
+        return out
+     
+    def interp1(x1,x2,i,steps):
+        out = x1 +(x2-x1)/(steps-1)*i
+        return out
     
-        # Check if obstacle object detected
-        obstacle_threshold = 20  # cm (actual distance after correction)
-        left_blocked = 0 < self.last_left_distance < obstacle_threshold
-        right_blocked = 0 < self.last_right_distance < obstacle_threshold
     
-        if left_blocked or right_blocked:
-            self.obstacle_detected = True
     
-            if not self.avoiding_obstacle:
-                current_time = time()
-                
-                # Первое обнаружение - ждем подтверждения
-                if not hasattr(self, 'first_obstacle_detection_time'):
-                    self.first_obstacle_detection_time = current_time
-                    print(" Obstacle detected, confirming...")
-                    return
-                
-                # Проверяем подтверждение
-                confirmation_time = 0.15
-                if current_time - self.first_obstacle_detection_time < confirmation_time:
-                    return
-                
-                # Препятствие подтверждено
-                print("Obstacle CONFIRMED")
-                self.avoiding_obstacle = True
-                self.obstacle_confirmed = True
-                self.turn_start_time = current_time
-    
-                # Определяем направление поворота
-                if left_blocked and not right_blocked:
-                    self.avoidance_turn_direction = "turn_right"
-                    print(f"Turning RIGHT (left blocked: {self.last_left_distance:.1f}cm)")
-                elif right_blocked and not left_blocked:
-                    self.avoidance_turn_direction = "turn_left"
-                    print(f" Turning LEFT (right blocked: {self.last_right_distance:.1f}cm)")
-                else:
-                    # Оба заблокированы - поворачиваем в сторону с большим расстоянием
-                    if self.last_left_distance > self.last_right_distance:
-                        self.avoidance_turn_direction = "turn_left"
-                        print(f" Turning LEFT (less blocked: L={self.last_left_distance:.1f} > R={self.last_right_distance:.1f})")
-                    else:
-                        self.avoidance_turn_direction = "turn_right"
-                        print(f" Turning RIGHT (less blocked: R={self.last_right_distance:.1f} > L={self.last_left_distance:.1f})")
-    
-                # Начинаем поворот БЕЗ остановки
-                self.accept_command(self.avoidance_turn_direction)
-            else:
-                # Уже поворачиваем - продолжаем если команда поворота завершилась
-                if self.current_movement_command != self.avoidance_turn_direction:
-                    print(f" Continuing {self.avoidance_turn_direction} (obstacle still present)")
-                    self.accept_command(self.avoidance_turn_direction)
+    def xyz_rotation_matrix (self,thetax,thetay,thetaz,inverse):
+        if (inverse == True):
+            #Rx*Ry*Rz
+            t2 = cos(thetay)
+            t3 = sin(thetaz)
+            t4 = cos(thetaz)
+            t5 = sin(thetay)
+            t6 = cos(thetax)
+            t7 = sin(thetax)
+            M = [t2*t4,t3*t6+t4*t5*t7,t3*t7-t4*t5*t6,-t2*t3,t4*t6-t3*t5*t7,t4*t7+t3*t5*t6,t5,-t2*t7,t2*t6]  
         else:
-            # Препятствие исчезло
-            self.obstacle_detected = False
+            #Rz*Ry*Rx
+            t2 = cos(thetaz);
+            t3 = sin(thetax);
+            t4 = sin(thetaz);
+            t5 = cos(thetax);
+            t6 = sin(thetay);
+            t7 = cos(thetay);
+            M = [t2*t7,t4*t7,-t6,-t4*t5+t2*t3*t6,t2*t5+t3*t4*t6,t3*t7,t3*t4+t2*t5*t6,-t2*t3+t4*t5*t6,t5*t7]
+        return M
     
-            # Сбрасываем таймер первого обнаружения
-            if hasattr(self, 'first_obstacle_detection_time'):
-                delattr(self, 'first_obstacle_detection_time')
+
+    def new_coordinates (self,M,x,y,z,x0,y0,z0):
+        xout= x0 + M[0]*x + M[3]*y + M[6]*z
+        yout= y0 + M[1]*x + M[4]*y + M[7]*z
+        zout= z0 + M[2]*x + M[5]*y + M[8]*z
+        return [xout,yout,zout]
+        
+
     
-            if self.avoiding_obstacle:
-                # Проверяем: было ли препятствие подтверждено?
-                if not self.obstacle_confirmed:
-                    print("False alarm - ignoring (obstacle disappeared before confirmation)")
-                    self.avoiding_obstacle = False
-                    self.avoidance_turn_direction = None
-                    self.turn_start_time = 0
-                    return
-                
-                # Минимальное время поворота
-                min_turn_duration = 0.5
-                elapsed_turn_time = time() - self.turn_start_time
-                
-                if elapsed_turn_time >= min_turn_duration:
-                    print(f" Obstacle cleared after {elapsed_turn_time:.2f}s turn")
-                    print(" Stopping turn and transitioning to forward movement...")
-                    
-                    # Сбрасываем флаги избегания препятствий
-                    self.avoiding_obstacle = False
-                    self.avoidance_turn_direction = None
-                    self.turn_start_time = 0
-                    self.obstacle_confirmed = False
-    
-                    # ВАЖНО: Последовательность команд для плавного перехода
-                    # 1. Останавливаем поворот
-                    self.accept_command("stop_walk")
-                    
-                    # 2. НЕ нужно добавлять sleep здесь - это заблокирует main_loop
-                    # 3. Команда forward будет обработана в следующем цикле
-                    #    и автоматически вызовет transition_to_neutral() если нужно
-                    self.accept_command("forward")
-                    
-                    print(" Commands queued: stop_walk → forward")
-                else:
-                    # Поворот начался недавно - продолжаем
-                    remaining_time = min_turn_duration - elapsed_turn_time
-                    print(f" Turn in progress ({elapsed_turn_time:.2f}s / {min_turn_duration}s), {remaining_time:.2f}s remaining...")
-    
-            # Initialize obstacle avoidance state if not present
-            if not hasattr(self, 'avoiding_obstacle'):
-                self.avoiding_obstacle = False
-                self.avoidance_turn_direction = None
-    
-            # Check if obstacle detected
-            obstacle_threshold = 30  # cm (actual distance after correction)
-            left_blocked = 0 < self.last_left_distance < obstacle_threshold
-            right_blocked = 0 < self.last_right_distance < obstacle_threshold
-    
-            if left_blocked or right_blocked:
-                self.obstacle_detected = True
-    
-                # If not yet avoiding, determine turn direction and transition to neutral if needed
-                if not self.avoiding_obstacle:
-                    print("Obstacle detected, transitioning to avoidance mode")
-                    self.avoiding_obstacle = True
-    
-                    # Determine which way to turn
-                    if left_blocked and not right_blocked:
-                        self.avoidance_turn_direction = "turn_right"
-                        print("Obstacle on left, will turn right")
-                    elif right_blocked and not left_blocked:
-                        self.avoidance_turn_direction = "turn_left"
-                        print("Obstacle on right, will turn left")
-                    else:
-                        # Both blocked, turn to less blocked side
-                        if self.last_left_distance > self.last_right_distance:
-                            self.avoidance_turn_direction = "turn_left"
-                            print("Obstacles detected, turning left (clearer)")
-                        else:
-                            self.avoidance_turn_direction = "turn_right"
-                            print("Obstacles detected, turning right (clearer)")
-    
-                    # Stop forward movement and start turning
-                    self.current_movement_command = "stop"
-                    self.accept_command("stop_walk")
-    
-                # Continue turning in the chosen direction
-                if self.avoiding_obstacle and self.avoidance_turn_direction:
-                    if self.current_movement_command != self.avoidance_turn_direction:
-                        print(f"Continuing to {self.avoidance_turn_direction}")
-                        self.accept_command(self.avoidance_turn_direction)
-            else:
-                # Obstacle cleared
-                self.obstacle_detected = False
-    
-                # If we were avoiding an obstacle, transition back to forward
-                if self.avoiding_obstacle:
-                    print("Obstacle cleared, transitioning back to forward movement")
-                    self.avoiding_obstacle = False
-                    self.avoidance_turn_direction = None
-    
-                    # Transition: stop turning, then go forward
-                    self.accept_command("stop_walk")
-                    # Queue forward command to execute after stop completes
-                    self.accept_command("forward")
+    def foot_coordinate (self,x,y,z,thetax,thetay):
+        cx = cos(thetax)
+        sx = sin(thetax)
+        cy = cos(thetay)
+        sy = sin(thetay)
+        xf = x*cy+ z*sy
+        yf = y*cx - z*cy*sx + x*sx*sy
+        zf = y*sx + z*cx*cy - x*cx*sy
+        return [xf,yf,zf]
 
-    def handle_touch_event(self):
-        """Handle touch sensor reaction: Stop -> Sit -> Give Paw (hold for 10 seconds)"""
-        print(f"Touch detected! Sequence step: {self.touch_sequence_step}")
-        current_time = time()
-
-        if self.touch_sequence_step == 0:
-            # First touch: Stop (use stop_walk for graceful stop during walking/turning)
-            print("Touch sequence: STOP")
-            if self.walking:
-                self.accept_command("stop_walk")
-            else:
-                self.accept_command("stop")
-            self.touch_sequence_step = 1
-        elif self.touch_sequence_step == 1 and self.Free:
-            # Second touch: Sit
-            print("Touch sequence: SIT")
-            self.accept_command("sit")
-            self.touch_sequence_step = 2
-        elif self.touch_sequence_step == 2 and self.sitting and self.t >= 0.99:
-            # Third touch and beyond: Give Paw Right and hold for 10 seconds
-            if not self.paw_holding:
-                print("Touch sequence: GIVE PAW RIGHT (holding for 10 seconds)")
-                self.accept_command("paw_right")
-                self.paw_holding = True
-                self.paw_hold_start_time = current_time
-                self.touch_sequence_step = 3
-            else:
-                print("Paw already being held, ignoring touch")
-        elif self.touch_sequence_step >= 3 and self.sitting and self.t >= 0.99:
-            # Already in paw holding state
-            if not self.paw_holding:
-                print("Touch sequence: GIVE PAW RIGHT (holding for 10 seconds)")
-                self.accept_command("paw_right")
-                self.paw_holding = True
-                self.paw_hold_start_time = current_time
-            else:
-                print("Paw already being held, ignoring touch")
-
-    def check_paw_hold_timer(self):
-        """Check if 10 seconds have passed and lower the paw"""
-        if self.paw_holding:
-            current_time = time()
-            elapsed = current_time - self.paw_hold_start_time
-            if elapsed >= 10.0:
-                print("10 seconds elapsed, lowering paw")
-                self.accept_command("paw_down")
-                self.paw_holding = False
-                self.paw_hold_start_time = 0
-
-    # ==================== CAMERA METHODS ====================
-
-    def capture_photo(self):
-        """Capture photo using Picamera2 and OpenCV"""
-        if not CAMERA_AVAILABLE or self.camera is None:
-            print("Camera not available")
-            return False
-
-        try:
-            # Start camera if not already started
-            if not self.camera.started:
-                self.camera.start()
-                sleep(0.5)  # Allow camera to warm up
-
-            # Capture image
-            image = self.camera.capture_array()
-
-            # Convert to OpenCV format (RGB to BGR)
-            image_bgr = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-
-            # Generate filename with timestamp
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"photo_{timestamp}.jpg"
-            filepath = os.path.join(self.photos_dir, filename)
-
-            # Save photo
-            cv2.imwrite(filepath, image_bgr)
-            print(f"Photo saved: {filepath}")
-
-            return True
-        except Exception as e:
-            print(f"Error capturing photo: {e}")
-            return False
-
-    # ==================== LOGGING METHODS ====================
-
-    def init_logging(self):
-        """Initialize CSV logging for RL environment"""
-        try:
-            with open(self.log_file, 'w', newline='') as f:
-                writer = csv.writer(f)
-                writer.writerow([
-                    'timestamp', 'command', 'action',
-                    'left_distance', 'right_distance', 'touch_detected',
-                    'imu_roll', 'imu_pitch', 'imu_accel_x', 'imu_accel_y', 'imu_accel_z',
-                    'servo_0', 'servo_1', 'servo_2', 'servo_3', 'servo_4', 'servo_5',
-                    'servo_6', 'servo_7', 'servo_8', 'servo_9', 'servo_10', 'servo_11'
-                ])
-            print(f"Logging initialized: {self.log_file}")
-        except Exception as e:
-            print(f"Error initializing logging: {e}")
-
-    def log_state(self, command=""):
-        """Log current robot state to CSV"""
-        try:
-            # Get IMU data
-            try:
-                accel = self.mpu.acceleration
-                accel_x, accel_y, accel_z = accel
-            except:
-                accel_x = accel_y = accel_z = 0.0
-
-            roll = self.Angle[0] if len(self.Angle) > 0 else 0.0
-            pitch = self.Angle[1] if len(self.Angle) > 1 else 0.0
-
-            # Log to CSV
-            with open(self.log_file, 'a', newline='') as f:
-                writer = csv.writer(f)
-                writer.writerow([
-                    datetime.now().isoformat(),
-                    command,
-                    self.current_action,
-                    self.last_left_distance,
-                    self.last_right_distance,
-                    1 if self.touch_detected else 0,
-                    roll,
-                    pitch,
-                    accel_x,
-                    accel_y,
-                    accel_z,
-                    *self.current_servo_angles
-                ])
-        except Exception as e:
-            print(f"Error logging state: {e}")
-
-    # ==================== TCP SERVER METHODS ====================
-
-    def start_tcp_server(self):
-        """Start TCP server for app control
-
-        Note: Binds to 0.0.0.0 to allow mobile app connections.
-        WARNING: This exposes the server to all network interfaces.
-        Use only on trusted networks or implement authentication if needed.
+        
+    def IK (self,L0, L1, L2, d, x, y, z, side): #Leg inverse Kinematics
         """
-        if not self.tcp_enabled:
-            return
-
+          s = 1 for left leg
+          s = -1 for right leg
+        """
+        t2 = y**2
+        t3 = z**2
+        t4 = t2+t3
+        t5 = 1/sqrt(t4)
+        t6 = L0**2
+        t7 = t2+t3-t6
+        t8 = sqrt(t7)
+        t9 = d-t8
+        t10 = x**2
+        t11 = t9**2
+        t15 = L1**2
+        t16 = L2**2
+        t12 = t10+t11-t15-t16
+        t13 = t10+t11
+        t14 = 1/sqrt(t13)
+        error = False
         try:
-            self.tcp_server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.tcp_server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            # Bind to all interfaces for mobile app access
-            # Change to '127.0.0.1' for local-only access if security is a concern
-            self.tcp_server_socket.bind(('0.0.0.0', self.tcp_port))
-            self.tcp_server_socket.listen(5)
-            self.tcp_server_socket.settimeout(1.0)  # Non-blocking accept
-
-            # Start TCP handler thread
-            tcp_thread = threading.Thread(target=self.tcp_handler_thread, daemon=True)
-            tcp_thread.start()
-
-            print(f"TCP server started on port {self.tcp_port}")
-        except Exception as e:
-            print(f"Error starting TCP server: {e}")
-            self.tcp_enabled = False
-
-    def tcp_handler_thread(self):
-        """Handle TCP connections from app"""
-        print("TCP handler thread started")
-
-        while self.continuer and self.tcp_enabled:
-            try:
-                # Accept connection with timeout
-                try:
-                    client_socket, address = self.tcp_server_socket.accept()
-                    print(f"TCP client connected: {address}")
-
-                    # Handle client in separate thread
-                    client_thread = threading.Thread(
-                        target=self.handle_tcp_client,
-                        args=(client_socket, address),
-                        daemon=True
-                    )
-                    client_thread.start()
-                except socket.timeout:
-                    continue
-            except Exception as e:
-                if self.continuer:
-                    print(f"TCP accept error: {e}")
-                sleep(0.1)
-
-    def handle_tcp_client(self, client_socket, address):
-        """Handle individual TCP client connection"""
-        try:
-            client_socket.settimeout(30.0)
-
-            while self.continuer:
-                try:
-                    data = client_socket.recv(1024)
-                    if not data:
-                        break
-
-                    command = data.decode('utf-8').strip().lower()
-                    print(f"TCP command from {address}: {command}")
-
-                    # Process command
-                    if command == "photo":
-                        success = self.capture_photo()
-                        response = "OK" if success else "ERROR"
-                        client_socket.send(response.encode('utf-8'))
-                    else:
-                        # Regular movement/action command
-                        self.accept_command(command)
-                        client_socket.send(b"OK")
-
-                except socket.timeout:
-                    break
-                except Exception as e:
-                    print(f"TCP client error: {e}")
-                    break
-        finally:
-            client_socket.close()
-            print(f"TCP client disconnected: {address}")
-
-    # ==================== CONSOLE HANDLER ====================
-
-    def console_input_thread(self):
-        print("\n" + "=" * 50)
-        print("         SpotMicro Console Control")
-        print("=" * 50)
-        print("BASIC COMMANDS: walk, sit, lie, twist, pee, stop, stand, stop_walk")
-        print("MOVEMENT: forward, backward, left, right, turn_left, turn_right")
-        print("PAWING: paw_left, paw_right, paw_down (when sitting)")
-        print("SETTINGS: move, anim, trot, imu, quit")
-        print("=" * 50)
-        print("Enter commands below:")
-        while self.continuer:
-            try:
-                command = input("> ").strip().lower()
-                if command:
-                    with self.console_lock:
-                        self.command_queue.append(command)
-                        print(f"Command queued: {command}")
-            except (EOFError, KeyboardInterrupt):
-                with self.console_lock:
-                    self.command_queue.append("quit")
-                break
-            except Exception as e:
-                print(f"Console input error: {e}")
-                sleep(0.1)
-
-    def process_console_commands(self):
-        def ensure_walking_mode():
-            if not self.walking and self.Free:
-                self.walking = True
-                self.Free = False
-                self.stop = False
-                self.t = 0
-                self.lock = True
-                self.walking_speed = 0
-                self.current_action = "Walking mode started"
-                print("=== WALKING STARTED ===")
-
-        def reset_to_neutral():
-            """Immediately reset all walking/movement state to neutral standing position"""
-            self.walking = False
-            self.recovering = False
-            self.stop = False
-            self.lock = False
-            self.Free = True
-            self.t = 0
-            self.walking_speed = 0
-            self.current_movement_command = "stop"
-            self.heading_offset = 0
-            self.transition_start_frame = None
-
-            # Reset leg positions to initial standing
-            self.pos_init = [-self.x_offset, self.track, -self.b_height,
-                             -self.x_offset, -self.track, -self.b_height,
-                             -self.x_offset, -self.track, -self.b_height,
-                             -self.x_offset, self.track, -self.b_height]
-            self.pos[0:12] = self.pos_init
-
-            # Reset body orientation and position
-            self.pos[12] = [0, 0, 0, 0, 0, 0]
-            self.pos[13] = [0, self.x_offset, self.Spot.xlf, self.Spot.xrf, self.Spot.xrr, self.Spot.xlr,
-                            self.pos[13][6], self.pos[13][7], self.pos[13][8], self.pos[13][9]]
-            self.pos[14] = [0, 0, self.Spot.ylf + self.track, self.Spot.yrf - self.track,
-                            self.Spot.yrr - self.track, self.Spot.ylr + self.track,
-                            self.pos[14][6], self.pos[14][7], self.pos[14][8], self.pos[14][9]]
-            self.pos[15] = [0, self.b_height, 0, 0, 0, 0,
-                            self.pos[15][6], self.pos[15][7], self.pos[15][8], self.pos[15][9]]
-
-            # Update spot variables
-            self.theta_spot = self.pos[12]
-            self.x_spot = self.pos[13]
-            self.y_spot = self.pos[14]
-            self.z_spot = self.pos[15]
-
-            # Reset filters and interpolation state
-            self.prev_pos = None
-            self.filtered_body_x = self.pos[13][1]
-            self.filtered_body_y = self.pos[14][1]
-            self.filtered_body_z = self.pos[15][1]
-            print("=== RESET TO NEUTRAL ===")
-
-        def transition_to_neutral():
-            """Transition from any state to neutral (standing) position"""
-            transitions_needed = []
-            needs_wait = False
-
-            # If paw is raised, lower it first
-            if self.sitting and (self.joypal > -1.0 or self.joypar > -1.0):
-                print("Transition: Lowering paw")
-                transitions_needed.append("paw_down")
-                self.paw_holding = False  # Cancel any ongoing paw hold
-
-            # If sitting, stand up
-            if self.sitting:
-                if not self.stop and not self.lock:
-                    print("Transition: Standing up from sitting")
-                    transitions_needed.append("stand")
-                else:
-                    # If in middle of sitting animation, need to wait
-                    print("Waiting for sitting animation to complete before transition")
-                    needs_wait = True
-
-            # If lying, stand up
-            if self.lying:
-                if not self.stop and not self.lock:
-                    print("Transition: Standing up from lying")
-                    transitions_needed.append("stand")
-                else:
-                    print("Waiting for lying animation to complete before transition")
-                    needs_wait = True
-
-            # If peeing/shifting, stop it first
-            if self.shifting:
-                if not self.stop and not self.lock:
-                    print("Transition: Returning from pee position")
-                    transitions_needed.append("pee")
-                    self.pee_hold_start_time = 0
-                else:
-                    print("Waiting for pee animation to complete before transition")
-                    needs_wait = True
-
-            return transitions_needed, needs_wait
-
-        with self.console_lock:
-            while self.command_queue:
-                command = self.command_queue.pop(0)
-                print(f"Executing: {command}")
-
-                # Check if we need transitions for movement commands
-                movement_commands = ["forward", "backward", "left", "right", "turn_left", "turn_right", "walk"]
-
-                if command in movement_commands:
-                    # If already walking, always reset to neutral before executing any new movement command
-                    if self.walking:
-                        print(f"New movement command '{command}' while walking: resetting to neutral")
-                        reset_to_neutral()
-
-                    # If recovering, re-queue the command to process after recovery completes
-                    elif self.recovering:
-                        print(f"Recovery in progress, re-queuing '{command}'")
-                        self.command_queue.append(command)
-                        break  # Exit loop, will process next time
-
-                    # If in another non-free state (sitting, lying, etc.), check transitions
-                    elif not self.Free:
-                        transitions, needs_wait = transition_to_neutral()
-                        if needs_wait:
-                            print(f"Animation in progress, re-queuing '{command}'")
-                            self.command_queue.append(command)
-                            continue
-                        if transitions:
-                            print(f"Command '{command}' requires transition through neutral state")
-                            for trans in reversed(transitions):
-                                self.command_queue.insert(0, trans)
-                            self.command_queue.insert(len(transitions), command)
-                            print(f"Transition sequence: {transitions} -> {command}")
-                            continue
-
-                if command == "quit":
-                    self.continuer = False
-                    self.current_action = "Shutting down"
-
-                elif command == "forward":
-                    ensure_walking_mode()
-                    self.current_movement_command = "forward"
-                    self.target_speed = 100
-                    # сброс датчиков касания
-                    self.touch_sequence_step = 0
-                    self.paw_holding = False
-                    self.paw_hold_start_time = 0
-                    self.current_action = "Moving forward"
-
-                elif command == "backward":
-                    ensure_walking_mode()
-                    self.current_movement_command = "backward"
-                    self.target_speed = 100
-                    self.current_action = "Moving backward"
-
-                elif command == "left":
-                    ensure_walking_mode()
-                    self.current_movement_command = "left"
-                    self.current_action = "Moving left"
-
-                elif command == "right":
-                    ensure_walking_mode()
-                    self.current_movement_command = "right"
-                    self.current_action = "Moving right"
-
-                elif command == "turn_left":
-                    ensure_walking_mode()
-                    self.current_movement_command = "turn_left"
-                    self.current_action = "Turning left"
-
-                elif command == "turn_right":
-                    ensure_walking_mode()
-                    self.current_movement_command = "turn_right"
-                    self.current_action = "Turning right"
-
-                elif command == "stop_walk":
-                    if self.walking:
-                        reset_to_neutral()
-                        self.touch_sequence_step = 0
-                        self.paw_holding = False
-                        self.paw_hold_start_time = 0
-                        self.current_action = "Walk stopped"
-                        print("=== WALK STOPPED ===")
-                    else:
-                        print("Not in walking mode.")
-
-                elif command == "walk":
-                    if self.walking and not self.stop and not self.lock:
-                        self.stop = True
-                        self.lock = True
-                        self.current_movement_command = "stop"
-                        self.current_action = "Stopping walk and exiting mode"
-                    elif not self.walking and self.Free:
-                        # ensure_walking_mode()
-                        self.current_movement_command = "stop"
-
-                elif command == "stab_test":
-                    print(f"CG : {'cg stab' if self.cg_stabilization_enabled else 'cg distab'}")
-                    print(f"IMU : {'stab imu' if self.imu_stabilization_enabled else 'distab imu'}")
-                    print(f" X={self.CGabs[0]-self.x_spot[1]:.1f}, Y={self.CGabs[1]-self.y_spot[1]:.1f}")
-
-                elif command == "adjust_params":
-          
-                    choice = input(" ")
-
-                    if choice == "1":
-                        self.body_filter_alpha = min(self.body_filter_alpha + 0.1, 0.5)
-                        print(f" alpha={self.body_filter_alpha}")
-                    elif choice == "2":
-                        self.body_filter_alpha = max(self.body_filter_alpha - 0.1, 0.05)
-                        print(f"alpha={self.body_filter_alpha}")
-                    elif choice == "3":
-                        self.cg_stabilization_enabled = not self.cg_stabilization_enabled
-                        print(f"CG : {'cg stab' if self.cg_stabilization_enabled else 'cg distab'}")
-
-                elif command == "stop":
-                    # Full emergency stop with reset to neutral
-                    reset_to_neutral()
-                    self.sitting = False
-                    self.lying = False
-                    self.twisting = False
-                    self.shifting = False
-                    self.pawing = False
-                    self.joypal = -1
-                    self.joypar = -1
-                    #self.touch_sequence_step = 0
-                    #self.paw_holding = False
-                    #self.paw_hold_start_time = 0
-                    self.current_action = "EMERGENCY STOP - All motions stopped"
-                    print("*** EMERGENCY STOP ***")
-
-                elif command == "sit":
-                    if self.lying and not self.stop and not self.lock:
-                        # Direct transition from lying to sitting
-                        angle_lying = 40 / 180 * pi
-                        x_end_lying = self.Spot.xlr - self.Spot.L2 + self.Spot.L1 * cos(angle_lying) + self.Spot.Lb / 2
-                        z_end_lying = self.Spot.L1 * sin(angle_lying) + self.Spot.d
-                        self.transition_start_frame = [0, 0, 0, x_end_lying, 0, z_end_lying]
-                        self.lying = False
-                        self.sitting = True
-                        self.stop = False
-                        self.Free = False
-                        self.t = 0
-                        self.lock = True
-                        self.pawing = False
-                        self.joypal = -1
-                        self.joypar = -1
-                        self.current_action = "Sitting from lying"
-                        print("=== SITTING FROM LYING (direct) ===")
-                    elif not self.sitting and self.Free:
-                        self.sitting = True
-                        self.stop = False
-                        self.Free = False
-                        self.t = 0
-                        self.lock = True
-                        self.pawing = False
-                        self.joypal = -1
-                        self.joypar = -1
-                        self.transition_start_frame = None
-                        self.current_action = "Sitting down"
-                        print("=== SITTING DOWN ===")
-                    elif self.sitting and not self.stop and not self.lock:
-                        self.stop = True
-                        self.lock = True
-                        self.pawing = False
-                        self.current_action = "Standing up"
-                        print("=== STANDING UP ===")
-
-                elif command == "stand":
-                    if (self.sitting or self.lying) and not self.stop and not self.lock:
-                        self.stop = True
-                        self.lock = True
-                        self.pawing = False
-                        self.touch_sequence_step = 0
-                        self.paw_holding = False
-                        self.paw_hold_start_time = 0
-                        self.current_action = "Standing up"
-                        print("=== STANDING UP ===")
-                    elif self.Free:
-                        print("Already standing.")
-
-
-                elif command == "lie":
-                    if self.sitting and not self.stop and not self.lock:
-                        # Direct transition from sitting to lying
-                        alpha_sitting = -30 / 180 * pi
-                        x_end_sitting = self.Spot.xlr - self.Spot.L2 + self.Spot.L1 * cos(pi / 3) + self.Spot.Lb / 2 * cos(
-                            -alpha_sitting) - self.Spot.d * sin(-alpha_sitting)
-                        z_end_sitting = self.Spot.L1 * sin(pi / 3) + self.Spot.Lb / 2 * sin(-alpha_sitting) + self.Spot.d * cos(-alpha_sitting)
-                        self.transition_start_frame = [0, alpha_sitting, 0, x_end_sitting, 0, z_end_sitting]
-                        self.sitting = False
-                        self.lying = True
-                        self.stop = False
-                        self.Free = False
-                        self.t = 0
-                        self.lock = True
-                        self.pawing = False
-                        self.current_action = "Lying from sitting"
-                        print("=== LYING FROM SITTING (direct) ===")
-                    elif not self.lying and self.Free:
-                        self.lying = True
-                        self.stop = False
-                        self.Free = False
-                        self.t = 0
-                        self.lock = True
-                        self.transition_start_frame = None
-                        self.current_action = "Lying down"
-                    elif self.lying and not self.stop and not self.lock:
-                        self.stop = True
-                        self.lock = True
-                        self.current_action = "Standing up"
-
-                elif command == "twist":
-                    if not self.twisting and self.Free:
-                        self.twisting = True
-                        self.Free = False
-                        self.t = 0
-                        self.lock = True
-                        self.current_action = "Twisting"
-
-                elif command == "stab_off":
-                    self.cg_stabilization_enabled = False
-                    self.imu_stabilization_enabled = False
-                    print("Ð¡ÑÐ°Ð±Ð¸Ð»Ð¸Ð·Ð°ÑÐ¸Ñ Ð¿Ð¾Ð»Ð½Ð¾ÑÑÑÑ Ð¾ÑÐºÐ»ÑÑÐµÐ½Ð°")
-
-                elif command == "stab_on":
-                    self.cg_stabilization_enabled = True
-                    self.imu_stabilization_enabled = True
-                    print("Ð¡ÑÐ°Ð±Ð¸Ð»Ð¸Ð·Ð°ÑÐ¸Ñ Ð²ÐºÐ»ÑÑÐµÐ½Ð°")
-
-                elif command == "paw_left":
-                    if self.sitting and self.t >= 0.99:
-                        self.joypal = min(1.0, self.joypal + 0.2)
-                        self.current_action = f"Left paw raised to {self.joypal:.1f}"
-                        print(f"Left paw position: {self.joypal:.1f}")
-
-                elif command == "paw_right":
-                    if self.sitting and self.t >= 0.99:
-                        self.joypar = min(1.0, self.joypar + 0.2)
-                        self.current_action = f"Right paw raised to {self.joypar:.1f}"
-                        print(f"Right paw position: {self.joypar:.1f}")
-
-                elif command == "paw_down":
-                    if self.sitting and self.t >= 0.99:
-                        self.joypal = max(-1.0, self.joypal - 0.2)
-                        self.joypar = max(-1.0, self.joypar - 0.2)
-                        self.current_action = "Paws lowered"
-                        print(f"Paw positions - Left: {self.joypal:.1f}, Right: {self.joypar:.1f}")
-
-                elif command == "pee":
-                    if not self.shifting and self.Free:
-                        self.shifting = True
-                        self.stop = False
-                        self.Free = False
-                        self.t = 0
-                        self.lock = True
-                        self.pee_hold_start_time = 0
-                        self.current_action = "Peeing started"
-                    elif self.shifting and not self.stop and not self.lock:
-                        self.stop = True
-                        self.lock = True
-                        self.Free = False
-                        self.pee_hold_start_time = 0
-                        self.current_action = "Stopping pee"
-
-                elif command == "move":
-                    self.move_flag = not self.move_flag
-                    state = "ON" if self.move_flag else "OFF"
-                    print(f"Servo movement: {state}")
-                    self.current_action = f"Servo movement {state}"
-
-                elif command == "anim":
-                    self.anim_flag = not self.anim_flag
-                    state = "ON" if self.anim_flag else "OFF"
-                    print(f"Animation: {state}")
-                    self.current_action = f"Animation {state}"
-
-                elif command == "trot":
-                    if not self.trot:
-                        self.trot = True
-                        self.stepl = self.stepl2
-                        self.h_amp = self.h_amp2
-                        self.v_amp = self.v_amp2
-                        self.track = self.track2
-                        self.tstep = self.tstep2
-                        self.trans = 1
-                    else:
-                        self.trot = False
-                        self.stepl = self.stepl4
-                        self.h_amp = self.h_amp4
-                        self.v_amp = self.v_amp4
-                        self.track = self.track4
-                        self.tstep = self.tstep4
-                        self.trans = 0
-                    state = "ON" if self.trot else "OFF"
-                    print(f"Trot mode: {state}")
-                    self.current_action = f"Trot mode {state}"
-
-                elif command == "imu":
-                    self.IMU_Comp = not self.IMU_Comp
-                    self.Integral_Angle = [0, 0]
-                    state = "ON" if self.IMU_Comp else "OFF"
-                    print(f"IMU compensation: {state}")
-                    self.current_action = f"IMU compensation {state}"
-
-                elif command == "photo":
-                    success = self.capture_photo()
-                    if success:
-                        self.current_action = "Photo captured"
-                    else:
-                        self.current_action = "Photo capture failed"
-
-                else:
-                    print(f"Unknown command: {command}")
-                    print(
-                        "Available commands: walk, sit, lie, twist, pee, stop, forward, backward, left, right, turn_left, turn_right, paw_left, paw_right, paw_down, move, anim, trot, imu, photo, quit")
-
-
-    # ==================== MAIN ROBOTIC CYCLE ====================
-
-    def main_loop(self):
-        print("Starting main loop... Use console to control the robot.")
-        while self.continuer:
-            self.clock.tick(60) #self.clock.tick(30)
-
-            if not hasattr(self, 'frame_counter'):
-                self.frame_counter = 0
-            self.frame_counter += 1
-
-            #if self.frame_counter % 100 == 0 and self.walking:
-                #print(f"=== ÐÑÐ»Ð°Ð´Ð¾ÑÐ½Ð°Ñ Ð¸Ð½ÑÐ¾ÑÐ¼Ð°ÑÐ¸Ñ (ÐºÐ°Ð´Ñ {self.frame_counter}) ===")
-                #print(f"ÐÐ¾Ð·Ð¸ÑÐ¸Ð¸ Ð½Ð¾Ð³ (Z): LF={self.pos[2]:.1f}, RF={self.pos[5]:.1f}, RR={self.pos[8]:.1f}, LR={self.pos[11]:.1f}")
-                #print(f"Ð£Ð³Ð»Ñ IMU: roll={self.Angle[0]*180/pi:.1f}Â°, pitch={self.Angle[1]*180/pi:.1f}Â°")
-                #if hasattr(self, 'CGabs'):
-                #    print(f"Ð¦ÐµÐ½ÑÑ ÑÑÐ¶ÐµÑÑÐ¸: X={self.CGabs[0]:.1f}, Y={self.CGabs[1]:.1f}")
-
-            # ÐÑÐ¸ÑÐ°ÐµÐ¼ ÑÐºÑÐ°Ð½ Ð² Ð½Ð°ÑÐ°Ð»Ðµ ÐºÐ°Ð¶Ð´Ð¾Ð³Ð¾ ÐºÐ°Ð´ÑÐ°
-            self.screen.fill(self.BLACK)
-
-            # ÐÑÐ¾Ð±ÑÐ°Ð¶Ð°ÐµÐ¼ Ð¸Ð½ÑÐ¾ÑÐ¼Ð°ÑÐ¸Ñ Ð¾ ÑÐ¾ÑÑÐ¾ÑÐ½Ð¸Ð¸
-            status_font = pygame.font.SysFont('Corbel', 24)
-            status_text = status_font.render(f"State: {self.current_action}", True, self.WHITE)
-            self.screen.blit(status_text, (10, 10))
-
-            # ÐÑÐ¾Ð±ÑÐ°Ð¶Ð°ÐµÐ¼ Ð¸Ð½ÑÐ¾ÑÐ¼Ð°ÑÐ¸Ñ Ð¾ ÑÐµÐ¶Ð¸Ð¼Ð°Ñ
-            anim_text = status_font.render(f"Animation: {'ON' if self.anim_flag else 'OFF'}", True, self.WHITE)
-            move_text = status_font.render(f"Movement: {'ON' if self.move_flag else 'OFF'}", True, self.WHITE)
-            self.screen.blit(anim_text, (10, 40))
-            self.screen.blit(move_text, (10, 70))
-
-            self.process_console_commands()
-
-            # ---- Sensor Reading (every 10 frames to reduce overhead) ----
-            if self.frame_counter % 10 == 0:
-                self.read_sensors()
-
-                # Handle obstacle avoidance
-                if self.walking or (hasattr(self, 'avoiding_obstacle') and self.avoiding_obstacle):
-                    self.handle_obstacle_avoidance()
-
-            # ---- Check paw hold timer ----
-            self.check_paw_hold_timer()
-
-            # ---- Logging (every 30 frames) ----
-            if self.frame_counter % 30 == 0:
-                self.log_state()
-
-            #Ð¿Ð»Ð°Ð²Ð½Ð¾Ðµ Ð¸Ð·Ð¼ÐµÐ½ÐµÐ½Ð¸Ðµ ÑÐºÐ¾ÑÐ¾ÑÑÐ¸
-            if self.walking and hasattr(self, 'target_speed'):
-                # ÐÐ»Ð°Ð²Ð½Ð¾Ðµ Ð´Ð¾ÑÑÐ¸Ð¶ÐµÐ½Ð¸Ðµ ÑÐµÐ»ÐµÐ²Ð¾Ð¹ ÑÐºÐ¾ÑÐ¾ÑÑÐ¸
-                speed_diff = self.target_speed - self.walking_speed
-                if abs(speed_diff) > 1:
-                    self.walking_speed += speed_diff * self.speed_smoothing #0.1  # ÐÐ»Ð°Ð²Ð½Ð¾Ðµ Ð¸Ð·Ð¼ÐµÐ½ÐµÐ½Ð¸Ðµ
-
-            # ---- IMU processing ----
-            self.angle = self.comp_filter(self.angle, self.tstep, self.Tcomp)
-            self.anglex_buff[self.iangle] = self.angle[0] + self.zeroangle_x
-            self.angley_buff[self.iangle] = self.angle[1] + self.zeroangle_y
-            self.Angle_old = self.Angle
-            self.Angle = [np.mean(self.anglex_buff), np.mean(self.angley_buff)]
-            self.iangle = (self.iangle + 1) % self.angle_count
-
-            # ---- pygame event ----
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT:
-                    self.continuer = False
-                if event.type == pygame.MOUSEBUTTONDOWN:
-                    self.mouseclick = True
-                else:
-                    self.mouseclick = False
-
-            if (not self.walking and not self.sitting and not self.lying and not self.twisting
-                and not self.shifting and not self.pawing) and self.lock:
-                self.lock = False
-
-            # ---- Movement logic for different states ----
-            if self.walking:
-                self.t = self.t + self.tstep
-                self.trec = int(self.t) + 1
-
-                # Process movement commands (fixed body-frame directions, no heading offset)
-                self.DIR_FORWARD = pi / 2
-                self.DIR_BACKWARD = 3 * pi / 2
-                self.DIR_LEFT = pi
-                self.DIR_RIGHT = 0
-
-                if self.current_movement_command == "forward":
-                    #self.walking_speed = 100  # 0.5
-                    self.walking_direction = self.DIR_FORWARD
-                    self.steering = 1e6
-                    self.cw = 1
-
-                elif self.current_movement_command == "backward":
-                    self.walking_speed = 100
-                    self.walking_direction = self.DIR_BACKWARD
-                    self.steering = 1e6
-                    self.cw = 1
-
-                elif self.current_movement_command == "left":
-                    self.walking_speed = 5  # 50
-                    self.walking_direction = self.DIR_LEFT
-                    self.steering = 1e6
-                    self.cw = 1
-
-                elif self.current_movement_command == "right":
-                    self.walking_speed = 5  # 50
-                    self.walking_direction = self.DIR_RIGHT
-                    self.steering = 1e6
-                    self.cw = 1
-
-                elif self.current_movement_command == "turn_left":
-                    self.walking_speed = 100
-                    self.walking_direction = pi/2
-                    self.steering = 80  # 1000
-                    self.cw = 1
-
-                elif self.current_movement_command == "turn_right":
-                    self.walking_speed = 100
-                    self.walking_direction = 0
-                    self.steering = 80  # 1000
-                    self.cw = -1
-
-                elif self.current_movement_command == "stop":
-                    self.walking_speed = 0.0
-                    self.walking_direction = 0
-                    self.steering = 1e6
-                    self.cw = 1
-
-                # Execute walking command
-                walk_height = self.b_height + 50
-
-                self.pos = self.Spot.start_walk_stop(self.track, self.x_offset, self.steering, self.walking_direction, self.cw,
-                                           self.walking_speed, self.v_amp, walk_height, self.stepl, self.t, self.tstep,
-                                           self.theta_spot, self.x_spot, self.y_spot, self.z_spot, 3 + self.trans)
-                if self.prev_pos is None:
-                    self.prev_pos = copy.deepcopy(self.pos)
-                else:
-                    for i in range(len(self.pos)):
-                        if isinstance(self.pos[i], list):
-                            for j in range(len(self.pos[i])):
-                                self.pos[i][j] = (self.prev_pos[i][j] * (1 - self.animation_smoothing) +
-                                                 self.pos[i][j] * self.animation_smoothing)
-                        else:
-                            self.pos[i] = (self.prev_pos[i] * (1 - self.animation_smoothing) +
-                                          self.pos[i] * self.animation_smoothing)
-                    self.prev_pos = copy.deepcopy(self.pos)
-                self.theta_spot = self.pos[12]
-                self.x_spot = self.pos[13]
-                self.y_spot = self.pos[14]
-                self.z_spot = self.pos[15]
-
-                if self.walking:
-                    if not hasattr(self, 'filtered_body_x'):
-                        self.filtered_body_x = self.pos[13][1]
-                        self.filtered_body_y = self.pos[14][1]
-                        self.filtered_body_z = self.pos[15][1]
-
-                    self.filtered_body_x = (1 - self.body_filter_alpha) * self.filtered_body_x + self.body_filter_alpha * self.pos[13][1]
-                    self.filtered_body_y = (1 - self.body_filter_alpha) * self.filtered_body_y + self.body_filter_alpha * self.pos[14][1]
-                    self.filtered_body_z = (1 - self.body_filter_alpha) * self.filtered_body_z + self.body_filter_alpha * self.pos[15][1]
-
-                    self.pos[13][1] = self.filtered_body_x
-                    self.pos[14][1] = self.filtered_body_y
-                    self.pos[15][1] = self.filtered_body_z
-                    try:
-                        self.CG = self.SpotCG.CG_calculation(self.thetalf, self.thetarf, self.thetarr, self.thetalr)
-                        self.M = self.Spot.xyz_rotation_matrix(self.theta_spot[0], self.theta_spot[1], self.theta_spot[2], False)
-                        self.CGabs = self.Spot.new_coordinates(self.M, self.CG[0], self.CG[1], self.CG[2],
-                                                               self.x_spot[1], self.y_spot[1], self.z_spot[1])
-
-                        self.pos = self.stabilize_body_cg_imu(self.pos, self.CGabs, self.Angle)
-
-                        if hasattr(self, 'check_leg_positions_reachable'):
-                            try:
-                                self.pos = self.check_leg_positions_reachable(self.pos)
-                            except Exception as e:
-                                print(f"error: {e}")
-
-                        self.theta_spot = self.pos[12]
-                        self.x_spot = self.pos[13]
-                        self.y_spot = self.pos[14]
-                        self.z_spot = self.pos[15]
-
-                    except Exception as e:
-                        print(f"error: {e}")
-                self.theta_spot = self.pos[12]
-                self.x_spot = self.pos[13]
-                self.y_spot = self.pos[14]
-                self.z_spot = self.pos[15]
-
-                if self.walking and self.frame_counter % 50 == 0:
-                    norm_x, norm_y = self.normalize_cg_offset()
-                #    print(f"CG Ð½Ð¾ÑÐ¼: X={norm_x:.2f}, Y={norm_y:.2f} | "
-                #          f"Ð¡Ð¼ÐµÑÐµÐ½Ð¸Ðµ ÑÐµÐ»Ð°: X={getattr(self, 'body_shift_x', 0):.1f}, "
-                #          f"Y={getattr(self, 'body_shift_y', 0):.1f}")
-
-                # Check if walking should stop
-                if self.stop and self.t >= (self.tstop + 1):  # ?????????? ???????
-                    # t > (tstop + 1 - tstep)
-                    # ?? ???????, ??? t ????????? tstop + 1 (????? ?????)
-                    self.lock = False
-                    self.stop = False
-                    self.walking = False
-                    print("===> Switching to recovering!")
-                    self.recovering = True  # Activate recovery state
-                    self.t = 0
-
-                    # Capture current pose to blend back to Stand
-                    self.temp_start_pos = [self.pos[12][0], self.pos[12][1], self.pos[12][2], self.pos[13][1], self.pos[14][1], self.pos[15][1]]
-
-                    self.current_action = "Realigning to Stand..."
-                    print("=== WALKING DONE -> REALIGNING TO STAND ===")
-
-            elif self.sitting:
-                # Sitting/Standing logic
-                alpha_sitting = -30 / 180 * pi
-                x_end_sitting = self.Spot.xlr - self.Spot.L2 + self.Spot.L1 * cos(pi / 3) + self.Spot.Lb / 2 * cos(
-                    -alpha_sitting) - self.Spot.d * sin(-alpha_sitting)
-                z_end_sitting = self.Spot.L1 * sin(pi / 3) + self.Spot.Lb / 2 * sin(-alpha_sitting) + self.Spot.d * cos(-alpha_sitting)
-                #start_frame_pos = [0, 0, 0, self.x_offset, 0, self.b_height]
-                start_frame_pos = self.transition_start_frame if self.transition_start_frame else [0, 0, 0, self.x_offset, 0, self.b_height]
-                end_frame_pos = [0, alpha_sitting, 0, x_end_sitting, 0, z_end_sitting]
-
-
-                # Store initial sitting position for pawing reference
-                if (self.t == 1) and (not self.pawing):
-                    self.pos_sit_init = copy.deepcopy(self.pos)
-                    # pawing
-                    self.pawing = True
-                    self.current_action = "Sitting completed - Pawing activated"
-                    print("=== SITTING COMPLETED ===")
-                    print("=== PAWING ACTIVATED ===")
-                    print("Use 'paw_left', 'paw_right', 'paw_down' commands to control paws")
-
-                if self.stop:
-                    # Standing up - go from sitting position to standing
-                    self.pos = self.Spot.moving(1 - self.t, end_frame_pos, start_frame_pos, self.pos)
-                    self.t = self.t - 4 * self.tstep
-                    if self.t <= 0:
-                        self.t = 0
-                        self.stop = False
-                        self.sitting = False
-                        self.Free = True
-                        self.lock = False
-                        self.pawing = False
-                        self.joypal = -1
-                        self.joypar = -1
-                        self.transition_start_frame = None
-                        self.current_action = "Standing completed"
-                        print("=== STANDING COMPLETED ===")
-                else:
-                    if self.t < 1:
-                        # Sitting down - go from start position to sitting position
-                        self.pos = self.Spot.moving(self.t, start_frame_pos, end_frame_pos, self.pos)
-                                                #test
-                        if self.t > 0.5:  # Начинаем корректировать во второй половине движения
-                            progress = (self.t - 0.5) * 2  # 0 to 1
-                            rear_shin_offset = -45 * progress  # Плавное увеличение от 0 до -30 test for back leg open
-                            self.pos[8] += rear_shin_offset   # Задняя правая нога (Z)
-                            self.pos[11] += rear_shin_offset  # Задняя левая нога (Z)
-                        # test end
-                        self.t = self.t + 4 * self.tstep
-                        if self.t >= 1:
-                            self.t = 1
-                            self.Free = True
-                            self.lock = False
-                            self.transition_start_frame = None
-                    elif self.t == 1 and self.pawing:
-                        L_paw = 2000  #
-                        alpha_pawing = -30/90*pi  #
-
-                        # Right front leg pawing
-                        self.pos[3] = self.pos_sit_init[3] + (L_paw*cos(alpha_pawing)-self.pos_sit_init[3])*(self.joypar+1)/2
-                        self.pos[5] = self.pos_sit_init[5] + (-self.Spot.d-L_paw*sin(alpha_pawing)-self.pos_sit_init[5])*(self.joypar+1)/2
-
-                        # Left front leg pawing -
-                        self.pos[0] = self.pos_sit_init[0] + (L_paw*cos(alpha_pawing)-self.pos_sit_init[0])*(self.joypal+1)/2
-                        self.pos[2] = self.pos_sit_init[2] + (-self.Spot.d-L_paw*sin(alpha_pawing)-self.pos_sit_init[2])*(self.joypal+1)/2
-
-
-                        # ---- IK ??? ???????? ??? ----
-                        self.thetarf = self.Spot.IK(self.Spot.L0, self.Spot.L1, self.Spot.L2, self.Spot.d,
-                                                    self.pos[3], self.pos[4], self.pos[5], -1)[0]
-                        self.thetalf = self.Spot.IK(self.Spot.L0, self.Spot.L1, self.Spot.L2, self.Spot.d,
-                                                    self.pos[0], self.pos[1], self.pos[2], 1)[0]
-
-                        # ---- FK Ð´Ð»Ñ Ð°Ð½Ð¸Ð¼Ð°ÑÐ¸Ð¸ ----
-                        self.legrf = self.Spot.FK(self.thetarf, -1)
-                        self.leglf = self.Spot.FK(self.thetalf, 1)
-
-                        self.xlegrf = self.Spot.xrf + self.pos[3]
-                        self.ylegrf = self.Spot.yrf + self.pos[4]
-                        self.zlegrf = self.pos[5]
-
-                        self.xleglf = self.Spot.xlf + self.pos[0]
-                        self.yleglf = self.Spot.ylf + self.pos[1]
-                        self.zleglf = self.pos[2]
-
-                        # ---- ÐÐ±Ð½Ð¾Ð²Ð»ÑÐµÐ¼ Ð°Ð±ÑÐ¾Ð»ÑÑÐ½ÑÐµ Ð¿Ð¾Ð·Ð¸ÑÐ¸Ð¸ ÑÐµÐ»Ð° ----
-                        self.theta_spot_sit = self.pos[12]
-                        self.x_spot_sit = self.pos[13]
-                        self.y_spot_sit = self.pos[14]
-                        self.z_spot_sit = self.pos[15]
-
-                        self.M = self.Spot.xyz_rotation_matrix(self.theta_spot_sit[3],
-                                                               self.theta_spot_sit[4],
-                                                               self.theta_spot_sit[2] + self.theta_spot_sit[5],
-                                                               False)
-
-                        self.paw_rf = self.Spot.new_coordinates(self.M, self.xlegrf, self.ylegrf, self.zlegrf,
-                                                                self.x_spot_sit[1], self.y_spot_sit[1],
-                                                                self.z_spot_sit[1])
-                        self.paw_lf = self.Spot.new_coordinates(self.M, self.xleglf, self.yleglf, self.zleglf,
-                                                                self.x_spot_sit[1], self.y_spot_sit[1],
-                                                                self.z_spot_sit[1])
-
-                        self.x_spot_sit[3] = self.paw_rf[0]
-                        self.y_spot_sit[3] = self.paw_rf[1]
-                        self.z_spot_sit[3] = self.paw_rf[2]
-
-                        self.x_spot_sit[2] = self.paw_lf[0]
-                        self.y_spot_sit[2] = self.paw_lf[1]
-                        self.z_spot_sit[2] = self.paw_lf[2]
-
-                        self.pos[13] = self.x_spot_sit
-                        self.pos[14] = self.y_spot_sit
-                        self.pos[15] = self.z_spot_sit
-
-
-            elif self.lying:
-                # Lying logic
-                angle_lying = 40 / 180 * pi
-                x_end_lying = self.Spot.xlr - self.Spot.L2 + self.Spot.L1 * cos(angle_lying) + self.Spot.Lb / 2
-                z_end_lying = self.Spot.L1 * sin(angle_lying) + self.Spot.d
-                #start_frame_pos = self.transition_start_frame if self.transition_start_frame else [0, 0, 0, self.x_offset, 0, self.b_height]
-                start_frame_pos = self.transition_start_frame if self.transition_start_frame else [0, 0, 0, self.x_offset, 0, self.b_height]
-                end_frame_pos = [0, 0, 0, x_end_lying, 0, z_end_lying]
-
-                self.pos = self.Spot.moving(self.t, start_frame_pos, end_frame_pos, self.pos)
-                if self.t > 0.3:  # Начинаем корректировать после 30% движения
-                    progress = min((self.t - 0.3) / 0.7, 1.0)  # 0 to 1
-                    shin_z_offset = -40 * progress  # Опускаем все голени на 40мм
-                    self.pos[2] += shin_z_offset    # LF Z
-                    self.pos[5] += shin_z_offset    # RF Z
-                    self.pos[8] += shin_z_offset    # RR Z
-                    self.pos[11] += shin_z_offset   # LR Z
-                    
-                    
-                if self.stop == False:
-                    if self.t < 1:
-                        self.t = self.t + 3 * self.tstep
-                        if self.t >= 1:
-                            self.t = 1
-                            self.Free = True
-                            self.lock = False
-                            self.transition_start_frame = None
-                else:
-                    self.t = self.t - 3 * self.tstep
-                    if self.t <= 0:
-                        self.t = 0
-                        self.stop = False
-                        self.lying = False
-                        self.Free = True
-                        self.lock = False
-                        self.transition_start_frame = None
-                        self.current_action = "Standing up completed"
-                        print("=== STANDING UP COMPLETED ===")
-
-            elif self.twisting:
-                # Twisting logic
-                x_angle_twisting = 0 / 180 * pi
-                y_angle_twisting = 0 / 180 * pi
-                z_angle_twisting = 30 / 180 * pi
-                start_frame_pos = [0, 0, 0, self.x_offset, 0, self.b_height]
-
-                self.t = self.t + 4 * self.tstep
-                if self.t >= 1:
-                    self.t = 1
-                    self.twisting = False
-                    self.Free = True
-                    self.current_action = "Twisting completed"
-                    print("=== TWISTING COMPLETED ===")
-
-                if self.t < 0.25:
-                    end_frame_pos = [x_angle_twisting, y_angle_twisting, z_angle_twisting, self.x_offset, 0, self.b_height]
-                    self.pos = self.Spot.moving(self.t * 4, start_frame_pos, end_frame_pos, self.pos)
-                elif self.t >= 0.25 and self.t < 0.5:
-                    end_frame_pos = [x_angle_twisting, y_angle_twisting, z_angle_twisting, self.x_offset, 0, self.b_height]
-                    self.pos = self.Spot.moving((self.t - 0.25) * 4, end_frame_pos, start_frame_pos, self.pos)
-                elif self.t >= 0.5 and self.t < 0.75:
-                    end_frame_pos = [-x_angle_twisting, -y_angle_twisting, -z_angle_twisting, self.x_offset, 0, self.b_height]
-                    self.pos = self.Spot.moving((self.t - 0.5) * 4, start_frame_pos, end_frame_pos, self.pos)
-                elif self.t >= 0.75 and self.t <= 1:
-                    end_frame_pos = [-x_angle_twisting, -y_angle_twisting, -z_angle_twisting, self.x_offset, 0, self.b_height]
-                    self.pos = self.Spot.moving((self.t - 0.75) * 4, end_frame_pos, start_frame_pos, self.pos)
-
-            elif self.shifting:
-                # Shifting/Peeing logic
-                self.x_end_shifting = self.ra_longi
-                self.y_end_shifting = -self.ra_lat
-                start_frame_pos = [0, 0, 0, self.x_offset, 0, self.b_height]
-                end_frame_pos = [0, 0, 0, self.x_end_shifting + self.x_offset, self.y_end_shifting, self.b_height]
-
-                self.pos = self.Spot.moving(self.t, start_frame_pos, end_frame_pos, self.pos)
-
-                if self.stop == False:
-                    if self.t < 1:
-                        self.t = self.t + 4 * self.tstep
-                        if self.t >= 1:
-                            self.t = 1
-                            self.Free = True
-                            self.lock = False
-                            self.pee_hold_start_time = time()
-                            print("=== PEE POSITION REACHED, HOLDING FOR 10s ===")
-                    else:
-                        # Auto-return after 10 seconds in pee position
-                        if self.pee_hold_start_time > 0 and (time() - self.pee_hold_start_time) >= 10:
-                            self.stop = True
-                            self.lock = True
-                            self.Free = False
-                            self.pee_hold_start_time = 0
-                            self.current_action = "Pee hold complete, returning to stand"
-                            print("=== PEE HOLD COMPLETE, RETURNING TO STAND ===")
-                else:
-                    self.t = self.t - 4 * self.tstep
-                    if self.t <= 0:
-                        self.t = 0
-                        self.stop = False
-                        self.shifting = False
-                        self.Free = True
-                        self.pee_hold_start_time = 0
-                        self.current_action = "Shifting completed"
-                        print("=== SHIFTING COMPLETED ===")
-            elif self.recovering:
-                # print(f"Recover t={t}, stance={stance}, transtep={transtep}")
-                # (Stand/Initial position)
-                self.transtep = 0.8 #0.5  #
-                self.t = self.t + self.transtep  # transtep = 0.025,
-
-                # Spot.moving (roll, pitch, yaw, x_body, y_body, z_body)
-                start_frame_pos = [self.temp_start_pos[0], self.temp_start_pos[1], self.temp_start_pos[2], self.temp_start_pos[3],
-                                   self.temp_start_pos[4], self.temp_start_pos[5]]
-                end_frame_pos = [0, 0, 0, self.x_offset, 0, self.b_height]  # ??????? ??????
-
-                self.pos = self.Spot.moving(self.t, start_frame_pos, end_frame_pos, self.pos)
-
-                if self.t >= 1:
-                    self.t = 0
-                    self.recovering = False
-                    self.Free = True
-                    self.lock = False
-                    self.walking = False
-                    self.current_action = "Stand recovery complete"
-                    print("=== STAND RECOVERY COMPLETED ===")
-
-                    self.pos_init = [-self.x_offset, self.track, -self.b_height, -self.x_offset, -self.track, -self.b_height, -self.x_offset, -self.track, -self.b_height,
-                                -self.x_offset, self.track, -self.b_height]
-                    self.pos[0:12] = self.pos_init  #
-                    self.heading_offset += self.pos[12][2]  # preserve heading (theta_spot yaw)
-                    self.pos[12] = [0, 0, 0, 0, 0, 0]  #
-                    self.pos[13] = [0, self.x_offset, self.Spot.xlf, self.Spot.xrf, self.Spot.xrr, self.Spot.xlr, self.pos[13][6], self.pos[13][7], self.pos[13][8],
-                               self.pos[13][9]]
-                    self.pos[14] = [0, 0, self.Spot.ylf + self.track, self.Spot.yrf - self.track, self.Spot.yrr - self.track, self.Spot.ylr + self.track, self.pos[14][6],
-                               self.pos[14][7], self.pos[14][8], self.pos[14][9]]
-                    self.pos[15] = [0, self.b_height, 0, 0, 0, 0, self.pos[15][6], self.pos[15][7], self.pos[15][8], self.pos[15][9]]
-
-                # Calculate center for animation
-            self.xc = self.steering * cos(self.walking_direction)
-            self.yc = self.steering * sin(self.walking_direction)
-            self.center_x = self.x_spot[0] + (self.xc * cos(self.theta_spot[2]) - self.yc * sin(self.theta_spot[2]))
-            self.center_y = self.y_spot[0] + (self.xc * sin(self.theta_spot[2]) + self.yc * cos(self.theta_spot[2]))
-
-            # Calculate servo angles for animation
-            self.thetalf = self.Spot.IK(self.Spot.L0, self.Spot.L1, self.Spot.L2, self.Spot.d, self.pos[0], self.pos[1], self.pos[2], 1)[0]
-            self.thetarf = self.Spot.IK(self.Spot.L0, self.Spot.L1, self.Spot.L2, self.Spot.d, self.pos[3], self.pos[4], self.pos[5], -1)[0]
-            self.thetarr = self.Spot.IK(self.Spot.L0, self.Spot.L1, self.Spot.L2, self.Spot.d, self.pos[6], self.pos[7], self.pos[8], -1)[0]
-            self.thetalr = self.Spot.IK(self.Spot.L0, self.Spot.L1, self.Spot.L2, self.Spot.d, self.pos[9], self.pos[10], self.pos[11], 1)[0]
-
-            # Update stance for animation
-            self.stance = [False, False, False, False]
-            if self.pos[15][2] < 10.01:
-                self.stance[0] = True
-            if self.pos[15][3] < 10.01:
-                self.stance[1] = True
-            if self.pos[15][4] < 10.01:
-                self.stance[2] = True
-            if self.pos[15][5] < 10.01:
-                self.stance[3] = True
-
-            # Display and animation
-            if self.anim_flag:
-                try:
-                    self.anim.animate(self.pos, self.t, pi / 12, -135 / 180 * pi, self.Angle, self.center_x, self.center_y,
-                                     self.thetalf, self.thetarf, self.thetarr, self.thetalr, self.walking_speed,
-                                     self.walking_direction, self.steering, self.stance)
-                except Exception as e:
-                    print(f"Animation error: {e}")
-
-            # Display buttons
-            self.mouse = pygame.mouse.get_pos()
-
-            # Animation toggle display
-            if (self.mouse[0] >= 510) and (self.mouse[0] <= 590) and (self.mouse[1] >= 500) and (self.mouse[1] <= 540):
-                pygame.draw.rect(self.screen, self.WHITE, [510, 500, 80, 40], 5)
-                if self.mouseclick and not self.lockmouse:
-                    self.lockmouse = True
-                    self.anim_flag = not self.anim_flag
-                    print(f"Animation toggled: {'ON' if self.anim_flag else 'OFF'}")
-            else:
-                pygame.draw.rect(self.screen, self.WHITE, [510, 500, 80, 40], 5)
-
-            if self.anim_flag and hasattr(self, 'CGabs'):
-                cg_screen_x = int(300 + self.CGabs[0] / 2)
-                cg_screen_y = int(300 - self.CGabs[1] / 2)
-                pygame.draw.circle(self.screen, self.RED, (cg_screen_x, cg_screen_y), 5)
-
-                body_screen_x = int(300 + self.x_spot[1] / 2)
-                body_screen_y = int(300 - self.y_spot[1] / 2)
-                pygame.draw.circle(self.screen, self.BLUE, (body_screen_x, body_screen_y), 3)
-
-                pygame.draw.line(self.screen, self.GREEN,
-                                (body_screen_x, body_screen_y),
-                                (cg_screen_x, cg_screen_y), 2)
-
-            # Move toggle display
-            if (self.mouse[0] >= 510) and (self.mouse[0] <= 590) and (self.mouse[1] >= 550) and (self.mouse[1] <= 590):
-                pygame.draw.rect(self.screen, self.WHITE, [510, 550, 80, 40], 5)
-                if self.mouseclick and not self.lockmouse and self.Free:
-                    self.lockmouse = True
-                    self.move_flag = not self.move_flag
-                    print(f"Servo movement toggled: {'ON' if self.move_flag else 'OFF'}")
-            else:
-                pygame.draw.rect(self.screen, self.WHITE, [510, 550, 80, 40], 5)
-
-            if not self.mouseclick and self.lockmouse:
-                self.lockmouse = False
-
-            if self.anim_flag:
-                pygame.draw.rect(self.screen, self.GREEN, [510, 500, 80, 40])
-                self.screen.blit(self.text_animon, (520, 510))
-            else:
-                pygame.draw.rect(self.screen, self.RED, [510, 500, 80, 40])
-                self.screen.blit(self.text_animoff, (520, 510))
-
-            if self.move_flag:
-                pygame.draw.rect(self.screen, self.GREEN, [510, 550, 80, 40])
-                self.screen.blit(self.text_moveon, (520, 560))
-            else:
-                pygame.draw.rect(self.screen, self.RED, [510, 550, 80, 40])
-                self.screen.blit(self.text_moveoff, (520, 560))
-
-            pygame.display.flip()
-
-            self.moving(self.pos, self.move_flag)
-
-            # Update CG and other calculations
-            self.thetalf = self.Spot.IK(self.Spot.L0, self.Spot.L1, self.Spot.L2, self.Spot.d, self.pos[0], self.pos[1], self.pos[2], 1)[0]
-            self.thetarf = self.Spot.IK(self.Spot.L0, self.Spot.L1, self.Spot.L2, self.Spot.d, self.pos[3], self.pos[4], self.pos[5], -1)[0]
-            self.thetarr = self.Spot.IK(self.Spot.L0, self.Spot.L1, self.Spot.L2, self.Spot.d, self.pos[6], self.pos[7], self.pos[8], -1)[0]
-            self.thetalr = self.Spot.IK(self.Spot.L0, self.Spot.L1, self.Spot.L2, self.Spot.d, self.pos[9], self.pos[10], self.pos[11], 1)[0]
-
-            self.CG = self.SpotCG.CG_calculation(self.thetalf, self.thetarf, self.thetarr, self.thetalr)
-            self.M = self.Spot.xyz_rotation_matrix(self.theta_spot[0], self.theta_spot[1], self.theta_spot[2], False)
-            self.CGabs = self.Spot.new_coordinates(self.M, self.CG[0], self.CG[1], self.CG[2], self.x_spot[1], self.y_spot[1], self.z_spot[1])
-
-
-            self.pos[13][6] = self.CG[0]
-            self.pos[14][6] = self.CG[1]
-            self.pos[15][6] = self.CG[2]
-
-            self.pos[13][7] = self.CGabs[0]
-            self.pos[14][7] = self.CGabs[1]
-            self.pos[15][7] = self.CGabs[2]
-
-        print("Shutting down...")
-        self.cleanup()
-        pygame.quit()
-
-    # ==================== HARDWARE HELPERS ====================
-    """
-    def comp_filter(self, angle, t, T):
-        acc = self.mpu.get_accel_data()
-        gyr = self.mpu.get_gyro_data()
-        denb = sqrt(acc['y'] ** 2 + acc['z'] ** 2)
-        dena = sqrt(acc['z'] ** 2 + acc['x'] ** 2)
-        alpha = atan(acc['y'] / dena) if dena else 0
-        beta = atan(acc['x'] / denb) if denb else 0
-        A = T / (T + t)
-        anglex = A * (angle[0] + t * gyr['x'] / 180 * pi) + (1 - A) * alpha
-        angley = A * (angle[1] + t * gyr['y'] / 180 * pi) + (1 - A) * beta
-        return [anglex, angley]
-"""
-    def comp_filter (self, angle,t,T):
-        #Complementary filter calculates body angles around xt and y axis from IMU data
-        acc = self.mpu.acceleration
-        gyr = self.mpu.gyro
-        denb = sqrt(acc[1]**2+acc[2]**2)
-        dena = sqrt(acc[2]**2+acc[0]**2)
-
-        if (dena == 0):
-            alpha = 0
-        else:
-            alpha = atan (acc[1]/dena)
-
-        if (denb == 0):
-            beta = 0
-        else:
-            beta = atan (acc[0]/denb)
-
-        A = T/(T+t)
-
-        anglex = A*(angle[0]+t*gyr[0]/180*pi)+(1-A)*alpha
-        angley = A*(angle[1]+t*gyr[1]/180*pi)+(1-A)*beta
-        #print(acc, gyr)
-        #print(anglex, angley)
-        return [anglex, angley]
-
-    def normalize_cg_offset(self):
-        if not hasattr(self, 'CGabs'):
-            return 0, 0
-
-        offset_x = self.CGabs[0] - self.x_spot[1]
-        offset_y = self.CGabs[1] - self.y_spot[1]
-
-        norm_x = offset_x / 100.0  # 
-        norm_y = offset_y / 100.0
-
-        norm_x = max(min(norm_x, 1.0), -1.0)
-        norm_y = max(min(norm_y, 1.0), -1.0)
-
-        return norm_x, norm_y
-
-    def stabilize_body_cg_imu(self, pos, cg_abs, imu_angles):
-
-        if not self.walking or not self.cg_stabilization_enabled:
-            return pos
-
-        try:
-            if hasattr(self, 'CGabs'):
-                cg_offset_x = self.CGabs[0] - self.x_spot[1]  # 
-                cg_offset_y = self.CGabs[1] - self.y_spot[1]  # 
-
-                target_body_shift_x = -cg_offset_x * 0.3  # 
-                target_body_shift_y = -cg_offset_y * 0.3
-
-                if not hasattr(self, 'body_shift_x'):
-                    self.body_shift_x = 0
-                    self.body_shift_y = 0
-
-                self.body_shift_x = self.body_shift_x * 0.8 + target_body_shift_x * 0.2
-                self.body_shift_y = self.body_shift_y * 0.8 + target_body_shift_y * 0.2
-
-                max_body_shift = 20  # 
-                self.body_shift_x = max(min(self.body_shift_x, max_body_shift), -max_body_shift)
-                self.body_shift_y = max(min(self.body_shift_y, max_body_shift), -max_body_shift)
-
-                pos[13][1] = self.x_spot[1] + self.body_shift_x  # X 
-                pos[14][1] = self.y_spot[1] + self.body_shift_y  # Y 
-
-            if self.IMU_Comp and self.imu_stabilization_enabled:
-                roll = imu_angles[0] * 0.5  # 
-                pitch = imu_angles[1] * 0.5
-
-                # Z: LF=2, RF=5, RR=8, LR=11
-                z_corrections = [
-                    -5 * pitch - 5 * roll,   # LF 
-                    -5 * pitch + 5 * roll,   # RF 
-                    5 * pitch + 5 * roll,    # RR 
-                    5 * pitch - 5 * roll     # LR 
-                ]
-
-                z_indices = [2, 5, 8, 11]
-                for i, z_idx in enumerate(z_indices):
-                    original_z = pos[z_idx]
-
-                    correction = z_corrections[i] * 0.1  # 
-                    pos[z_idx] = original_z + correction
-
-                    max_z_adjustment = 10  #
-                    if abs(pos[z_idx] - original_z) > max_z_adjustment:
-                        pos[z_idx] = original_z + (max_z_adjustment if correction > 0 else -max_z_adjustment)
-
-            return pos
-
-        except Exception as e:
-            print(f"ÐÑÐ¸Ð±ÐºÐ° ÑÑÐ°Ð±Ð¸Ð»Ð¸Ð·Ð°ÑÐ¸Ð¸: {e}")
-            return pos
-
-
-    def check_leg_positions_reachable(self, pos):
-        try:
-            if self.walking:
-                min_z = -60  #  -80
-                max_z = 40   #  30
-                max_xy = 120 #100
-            else:
-                min_z = -80
-                max_z = 30
-                max_xy = 100
-
-            for i in range(4):
-                # LF(0,1,2), RF(3,4,5), RR(6,7,8), LR(9,10,11)
-                x_idx = i*3
-                y_idx = i*3 + 1
-                z_idx = i*3 + 2
-
-                if i == 0:  # LF
-                    x_offset, y_offset, z_offset = self.xtlf, self.ytlf, self.ztlf
-                elif i == 1:  # RF
-                    x_offset, y_offset, z_offset = self.xtrf, self.ytrf, self.ztrf
-                elif i == 2:  # RR
-                    x_offset, y_offset, z_offset = self.xtrr, self.ytrr, self.ztrr
-                else:  # LR
-                    x_offset, y_offset, z_offset = self.xtlr, self.ytlr, self.ztlr
-
-                x_abs = pos[x_idx] + x_offset
-                y_abs = pos[y_idx] + y_offset
-                z_abs = pos[z_idx] + z_offset
-
-                if z_abs < min_z:
-                    correction = (min_z - z_abs) * 0.3  #  30%
-                    pos[z_idx] += correction
-                    #print(f" {i}: z={z_abs:.1f} -> {pos[z_idx]+z_offset:.1f}")
-                elif z_abs > max_z:
-                    correction = (max_z - z_abs) * 0.3
-                    pos[z_idx] += correction
-                    #print(f" {i}: z={z_abs:.1f} -> {pos[z_idx]+z_offset:.1f}")
-
-                if abs(x_abs) > max_xy or abs(y_abs) > max_xy:
-                    print(f"Leg {i} : x={x_abs:.1f}, y={y_abs:.1f}")
-
-            return pos
-
-        except Exception as e:
-            print(f" check_leg_positions_reachable: {e}")
-            return pos
-
-    # moving servos
-    def moving(self, pos, move):
-        if not hasattr(self, 'current_servo_angles'):
-            self.current_servo_angles = [0.0] * 12
-
-        thetalf_reply = self.Spot.IK(self.Spot.L0, self.Spot.L1, self.Spot.L2, self.Spot.d,
-                                    pos[0] + self.xtlf, pos[1] + self.ytlf, pos[2] + self.ztlf, 1)
-        thetarf_reply = self.Spot.IK(self.Spot.L0, self.Spot.L1, self.Spot.L2, self.Spot.d,
-                                    pos[3] + self.xtrf, pos[4] + self.ytrf, pos[5] + self.ztrf, -1)
-        thetarr_reply = self.Spot.IK(self.Spot.L0, self.Spot.L1, self.Spot.L2, self.Spot.d,
-                                    pos[6] + self.xtrr, pos[7] + self.ytrr, pos[8] + self.ztrr, -1)
-        thetalr_reply = self.Spot.IK(self.Spot.L0, self.Spot.L1, self.Spot.L2, self.Spot.d,
-                                    pos[9] + self.xtlr, pos[10] + self.ytlr, pos[11] + self.ztlr, 1)
-
-        if move:
-            if self.walking and not self.stop:
-                servo_smoothing = 0.4  # 
-            else:
-                servo_smoothing = 0.1  # 
+            theta1 = side*(-pi/2+asin(t5*t8))+asin(t5*y)
+            theta2= -asin(t14*x)+asin(L2*t14*sqrt(1/t15*1/t16*t12**2*(-1/4)+1))
+            theta3 =-pi + acos(-t12/2/(L1*L2))
+            
+        except ValueError:
+            print ('ValueError IK')
+            error = True  
+            theta1=90
+            theta2=90
+            theta3=90
+        
+        theta = [theta1, theta2, theta3]
+        return (theta,error)
+
+    def FK (self, theta, side):
+        """ Calculation of articulation points """
+        """
+        s = 1 for left leg
+        s = -1 for right leg
+        """
+        x_shoulder1 = 0
+        y_shoulder1 = Spot.d*sin(theta[0])
+        z_shoulder1 = -Spot.d*cos(theta[0])
+        
+        x_shoulder2 = 0
+        y_shoulder2 =side*Spot.L0*cos(theta[0])+Spot.d*sin(theta[0])
+        z_shoulder2 =side*Spot.L0*sin(theta[0])-Spot.d*cos(theta[0]) 
+               
+        x_elbow = -Spot.L1*sin(theta[1])
+        y_elbow = side*Spot.L0*cos(theta[0])-(-Spot.d-Spot.L1*cos(theta[1]))*sin(theta[0])
+        z_elbow = side*Spot.L0*sin(theta[0]) +(-Spot.d-Spot.L1*cos(theta[1]))*cos(theta[0])
+        
+        return [x_shoulder1,x_shoulder2,x_elbow,y_shoulder1,y_shoulder2,y_elbow,z_shoulder1,z_shoulder2,z_elbow]
+    
+    
+    def FK_Weight (self, theta, side):
+        """ Calculation of articulation points """
+        """
+        side = 1 for left leg
+        side = -1 for right leg
+        """
                 
-            if not thetalf_reply[1]:
-                for i in range(3):
-                    target_angle_rad = thetalf_reply[0][i]
-                    target_angle_deg = target_angle_rad / pi * 180
+        xCG_Shoulder1 = Spot.xCG_Shoulder
+        yCG_Shoulder1 =side*Spot.yCG_Shoulder*cos(theta[0])-Spot.zCG_Shoulder*sin(theta[0])
+        zCG_Shoulder1 =side*Spot.yCG_Shoulder*sin(theta[0])+Spot.zCG_Shoulder*cos(theta[0]) 
+               
+        xCG_Leg1 = Spot.xCG_Leg*cos(theta[1]) + Spot.zCG_Leg*sin(theta[1])
+        yCG_Leg1 = cos(theta[0])*(Spot.L0*side + side*Spot.yCG_Leg) + sin(theta[0])*(Spot.d - Spot.zCG_Leg*cos(theta[1]) + Spot.xCG_Leg*sin(theta[1]))
+        zCG_Leg1 = sin(theta[0])*(Spot.L0*side + side*Spot.yCG_Leg) - cos(theta[0])*(Spot.d - Spot.zCG_Leg*cos(theta[1]) + Spot.xCG_Leg*sin(theta[1]))
+        
+        xCG_Foreleg1 = cos(theta[1])*(Spot.xCG_Foreleg*cos(theta[2]) + Spot.zCG_Foreleg*sin(theta[2])) - sin(theta[1])*(Spot.L1 - Spot.zCG_Foreleg*cos(theta[2]) + Spot.xCG_Foreleg*sin(theta[2]))
+        yCG_Foreleg1 = cos(theta[0])*(Spot.L0*side + side*Spot.yCG_Foreleg) + sin(theta[0])*(Spot.d + sin(theta[1])*(Spot.xCG_Foreleg*cos(theta[2]) + Spot.zCG_Foreleg*sin(theta[2])) + cos(theta[1])*(Spot.L1 - Spot.zCG_Foreleg*cos(theta[2]) + Spot.xCG_Foreleg*sin(theta[2])))
+        zCG_Foreleg1 = sin(theta[0])*(Spot.L0*side + side*Spot.yCG_Foreleg) - cos(theta[0])*(Spot.d + sin(theta[1])*(Spot.xCG_Foreleg*cos(theta[2]) + Spot.zCG_Foreleg*sin(theta[2])) + cos(theta[1])*(Spot.L1 - Spot.zCG_Foreleg*cos(theta[2]) + Spot.xCG_Foreleg*sin(theta[2])))
+        
+        return [xCG_Shoulder1,xCG_Leg1,xCG_Foreleg1,yCG_Shoulder1,yCG_Leg1,yCG_Foreleg1,zCG_Shoulder1,zCG_Leg1,zCG_Foreleg1]
+                          
+    
+    def start_walk_stop (self,track,x_offset,steering_radius, steering_angle,cw,h_amp,v_amp,height,stepl,t,tstep,theta_spot,x_spot,y_spot,z_spot,phase):            
 
-                    if i == 0:
-                        target_angle_calib = target_angle_deg * self.Spot.angle_scale_factor_lf1 * self.Spot.dir01 + self.Spot.zero01
-                        current_idx = 0
-                    elif i == 1:
-                        target_angle_calib = target_angle_deg * self.Spot.angle_scale_factor_lf2 * self.Spot.dir02 + self.Spot.zero02
-                        current_idx = 1
-                    else:
-                        target_angle_calib = target_angle_deg * self.Spot.angle_scale_factor_lf3 * self.Spot.dir03 + self.Spot.zero03
-                        current_idx = 2
+         
+         trans =  (phase-1)%2 
+         if (trans==1): #2steps walk
+             tr =0.5 #2 steps walk
+             seq = [0,0.5,0,0.5];
+         else: 
+             tr =0.25 #4 steps walk
+             seq = [0,0.5,0.25,0.75]
+             
+         alpha = np.zeros(4)
+         alphav =np.zeros(4)
 
-                    current_angle = self.current_servo_angles[current_idx]
-                    smoothed_angle = current_angle * (1 - servo_smoothing) + target_angle_calib * servo_smoothing
-                    self.current_servo_angles[current_idx] = smoothed_angle
+         theta_spot_updated = theta_spot
+ 
+         CG = [x_spot[6],y_spot[6],z_spot[6]]
+       
+         """ Steering center coordinates in spot frame """
+         xc = steering_radius* cos(steering_angle)
+         yc = steering_radius* sin(steering_angle)
+         
+         #rotation matrix for frame position
+         #Mf = Spot.xyz_rotation_matrix (self,frame_pos[0],frame_pos[1],frame_pos[2],False)
+         
+         Ms = Spot.xyz_rotation_matrix (self,0,0,theta_spot_updated[2],False)
+ 
+         s = Spot.new_coordinates(self,Ms,xc,yc,0,x_spot[0],y_spot[0],z_spot[0])
+         xs = s[0]
+         ys = s[1]
+         
+         """ Nominal Foot Position """        
+         xn = [Spot.xlf, Spot.xrf,Spot.xrr, Spot.xlr]
+         yn = [Spot.ylf+track,Spot.yrf-track,Spot.yrr-track,Spot.ylr+track]
+         
+         radii = np.zeros(4)
+         an = np.zeros(4)
+         for i in range (0,4): 
+             """ Steering radius """ 
+             radii[i] = sqrt((xc-xn[i])**2+(yc-yn[i])**2)
+             """ Foot nominal angle"""  
+             an[i] = atan2(yn[i]-yc,xn[i]-xc)   
+         
+         """ Motion angle """
+         maxr = max(radii)
+         mangle = h_amp/maxr 
+         
+         """ Rotation angle and translation calculation"""    
+         if (phase <=2)|(phase >= 5):   #stop or start       
+             dtheta = mangle/(1-stepl)*tstep/2*cw
+         else:
+             dtheta = mangle/(1-stepl)*tstep*cw
+         theta_spot_updated[2] = dtheta + theta_spot[2]
+         
+         #Matrix from local body frame to absolute space rrame
+         Ms_updated = Spot.xyz_rotation_matrix (self,theta_spot_updated[3],theta_spot_updated[4],theta_spot_updated[2]+theta_spot_updated[5],False)
+         #Matrix from absolute space rrame to loacal body frame
+         Msi_updated = Spot.xyz_rotation_matrix (self,-theta_spot_updated[3],-theta_spot_updated[4],-(theta_spot_updated[2]+theta_spot_updated[5]),True)
+         #Delta rotation matric from from body center to absolute space frame
+         dMs = Spot.xyz_rotation_matrix (self,0,0,dtheta,False)
+                  
+         """ Foot nominal center absolute position"""
+         foot_center = Spot.new_coordinates(self,dMs,x_spot[0]-xs, y_spot[0]-ys,0,xs,ys,0)         
+                         
+         t1 = t%1
+         kcomp = 1
+         anb = pi- asin(10/v_amp)
+         
+         stance = [True,True,True,True]
+        
+         for i in range (0,4):
+            
+            if  (t1<(seq[i]+tr))&(t1>(seq[i]+stepl)):                
+                alphav[i] =anb + (pi-anb)/(tr-stepl)*(t1-seq[i]-stepl)
+                #print (t1,alphav[i])
+            if (t1<=seq[i]):
+                 stance[i] = True #Leg is on the ground (absolute position value unchanged)
+            else:        
+                 if (t1<(seq[i]+tr)):
+                     
+                     
+                     if (t1<(seq[i]+stepl)):
+                         stance[i] = False #leg is lifted (absolute position value changes)
+                         alphav[i] = anb*(t1-seq[i])/stepl
+                     #print (t1,alphav[i])
+                     t2 = seq[i]+stepl
+                     if (phase <= 2): # start
+                         #End position alpha 
+                         alpha[i] = -seq[i]/(1-stepl)/2 + (t2-seq[i])/stepl/(1-stepl)*seq[i]  
+                     if (phase >= 5): #stop                         
+                         alpha[i] = -1/2 + seq[i]/(1-stepl)/2 + (t2-seq[i])/stepl*(1-seq[i]/(1-stepl)) 
+                     if (phase <=4)&(phase>=3):  #walk                                               
+                         alpha[i] = -1/2  + ((t2-seq[i])/stepl) 
+                 else:         
+                     stance[i] = True #Leg is on the ground (absolute position value unchanged)
+                     
+         """ Compensation Calculation """
+         stance_test = np.sum(stance) #if sum = 4 all feet are on the floor --> body balance
+         
+         #absolute stance area target point
+         #Barycenter of sustentation area with higher weight of diagonal points
+         weight = 1.4
+         x_abs_area = np.zeros(4)
+         y_abs_area = np.zeros(4)
+         
+         x_abs_area[0] = ((x_spot[3]+x_spot[5])*weight+x_spot[4])/(2*weight+1)*(1-trans) + (x_spot[3]+x_spot[5])/2 *trans
+         y_abs_area[0] = ((y_spot[3]+y_spot[5])*weight+y_spot[4])/(2*weight+1)*(1-trans) + (y_spot[3]+y_spot[5])/2 *trans                               
+         x_abs_area[1] = ((x_spot[2]+x_spot[4])*weight+x_spot[5])/(2*weight+1)*(1-trans) + (x_spot[2]+x_spot[4])/2 *trans
+         y_abs_area[1] = ((y_spot[2]+y_spot[4])*weight+y_spot[5])/(2*weight+1)*(1-trans) + (y_spot[2]+y_spot[4])/2 *trans               
+         x_abs_area[2] = ((x_spot[3]+x_spot[5])*weight+x_spot[2])/(2*weight+1)*(1-trans) + (x_spot[3]+x_spot[5])/2 *trans
+         y_abs_area[2] = ((y_spot[3]+y_spot[5])*weight+y_spot[2])/(2*weight+1)*(1-trans) + (y_spot[3]+y_spot[5])/2 *trans 
+         x_abs_area[3] = ((x_spot[2]+x_spot[4])*weight+x_spot[3])/(2*weight+1)*(1-trans) + (x_spot[2]+x_spot[4])/2 *trans
+         y_abs_area[3] = ((y_spot[2]+y_spot[4])*weight+y_spot[3])/(2*weight+1)*(1-trans) + (y_spot[2]+y_spot[4])/2 *trans  
+              
+         if  (stance_test == 4): 
+             istart = 0
+             iend = 0
+             #identify transition start and target
+             tstart = (int(t1/tr)*tr)
+             tend = tstart+tr
+             if (tend==1):
+                 tend = 0
+              
+             for i in range (0,4):
+                 if (tstart == seq[i]):
+                     istart = i
+                 if (tend  == seq[i]):
+                     iend = i
+             
+             if (t1>(seq[istart]+stepl)):        
+                 x_abs_comp= x_abs_area[istart]+(x_abs_area[iend]-x_abs_area[istart])*(t1-tstart-stepl)/(tr-stepl)
+                 y_abs_comp= y_abs_area[istart]+(y_abs_area[iend]-y_abs_area[istart])*(t1-tstart-stepl)/(tr-stepl) 
+             else:
+                 x_abs_comp = x_abs_area[istart]
+                 y_abs_comp = y_abs_area[istart]  
+             #print (t1,x_abs_comp,istart,iend,tstart,tend)    
+         else:
+            for i in range (0,4):
+                if (stance[i]==0):
+                    x_abs_comp = x_abs_area[i] 
+                    y_abs_comp = y_abs_area[i]
+                    
+         Msi_comp = Spot.xyz_rotation_matrix (self,0,0,-theta_spot_updated[2],True) 
+         #compensation calculation in body center frame
+         comp= Spot.new_coordinates(self,Msi_comp,x_abs_comp-x_spot[0],y_abs_comp-y_spot[0],0,0,0,0)                     
+         """ Compensation calculation with theta """
+         v_amp_t = v_amp
+         
+         ts = 0.25
+         if (phase <= 2): #start
+             if (t1< ts):
+                 kcomp = t1/ts
+                 v_amp_t = 0
+         elif (phase >= 5):  #stop
+             if (t1 > (1-ts)):
+                 kcomp = (1-t1)/ts
+                 v_amp_t = 0
+                 
+         Ms_comp  =  Spot.xyz_rotation_matrix (self,0,0,theta_spot_updated[2],False)  
+         #Compensation calculation absoltute space frame
+         compt =  Spot.new_coordinates(self,Ms_comp,(comp[0]-CG[0])*kcomp+x_offset,(comp[1]-CG[1])*kcomp,0,0,0,0)
+         """ Frame center new position with gravity center compensation, offset and height """
+         x_framecenter_comp = foot_center[0] + compt[0]
+         y_framecenter_comp = foot_center[1] + compt[1] 
+         z_framecenter_comp = height
+                 
+         """ New Frame corners position absolute including compensation """
+         x_frame = [Spot.xlf, Spot.xrf, Spot.xrr, Spot.xlr]
+         y_frame = [Spot.ylf, Spot.yrf, Spot.yrr, Spot.ylr]
+         z_frame = [0,0,0,0]
+         
+         x_framecorner = np.zeros(4)
+         y_framecorner = np.zeros(4)
+         z_framecorner = np.zeros(4)
 
-                    try:
-                        self.kit0.servo[self.Spot.servo_table[current_idx]].angle = smoothed_angle
-                    except ValueError:
-                        print(f'Angle out of Range for servo {current_idx}')
+         for i in range (0,4): 
+             #Body corners calculation in absolute space frame
+             frame_corner = Spot.new_coordinates(self,Ms_updated,x_frame[i],y_frame[i],z_frame[i],x_framecenter_comp,y_framecenter_comp,z_framecenter_comp)
+             x_framecorner[i] = frame_corner[0]
+             y_framecorner[i] = frame_corner[1]
+             z_framecorner[i] = frame_corner[2]
 
-            if not thetarf_reply[1]:
-                for i in range(3):
-                    target_angle_rad = thetarf_reply[0][i]
-                    target_angle_deg = target_angle_rad / pi * 180
+        
+         xleg = np.zeros(4)
+         yleg = np.zeros(4)
+         zleg = np.zeros(4)
+         xabs = np.zeros(4)
+         yabs = np.zeros(4)
+         zabs = np.zeros(4)
+         xint = np.zeros(4)
+         yint = np.zeros(4)
+         zint = np.zeros(4)
+         
+         for i in range (0,4):              
+            if (t1>seq[i])&(t1<(seq[i]+tr)):
+                 #relative position calculation (used for inverse kinematics)
+                 alphah = an[i]+mangle*alpha[i]*cw
+                 xleg_target = xc + radii[i]*cos(alphah) -(comp[0]-CG[0])*kcomp -x_offset -x_frame[i]
+                 yleg_target = yc + radii[i]*sin(alphah) -(comp[1]-CG[1])*kcomp -y_frame[i]
+                 
+                 leg_current = Spot.new_coordinates(self,Msi_comp,x_spot[i+2]-x_framecorner[i],y_spot[i+2]-y_framecorner[i],-z_framecorner[i],0,0,0)
+                 #interpolate between current position and targe
+                 if ((seq[i]+stepl-t1)>tstep):
+                     xint[i] = leg_current[0]+(xleg_target - leg_current[0])*(tstep)/(seq[i]+stepl-t1)
+                     yint[i] = leg_current[1]+(yleg_target - leg_current[1])*(tstep)/(seq[i]+stepl-t1)
+                 else:
+                     xint[i] = xleg_target 
+                     yint[i] = yleg_target   
+                 zint[i] = leg_current[2] + v_amp_t*sin(alphav[i])              
+                 #print (leg_current[2],zint[i],leg_current[2]-zint[i])
+                 Msi_body = Spot.xyz_rotation_matrix (self,-theta_spot_updated[3],-theta_spot_updated[4],-theta_spot_updated[5],True) 
+                 legs = Spot.new_coordinates(self,Msi_body,xint[i],yint[i],zint[i],0,0,0)
+                 xleg[i]= legs[0]
+                 yleg[i]= legs[1]
+                 zleg[i]= legs[2]
+                 
+                 #absolute foot position 
+                 #Msb_updated = Spot.xyz_rotation_matrix (self,0,0,theta_spot_updated[2]+theta_spot_updated[5],False)
+                 foot_abs = Spot.new_coordinates(self,Ms_updated,xleg[i],yleg[i],zleg[i],x_framecorner[i],y_framecorner[i],z_framecorner[i])
+                 
 
-                    if i == 0:
-                        target_angle_calib = target_angle_deg * self.Spot.angle_scale_factor_rf1 * self.Spot.dir04 + self.Spot.zero04
-                        current_idx = 3
-                    elif i == 1:
-                        target_angle_calib = target_angle_deg * self.Spot.angle_scale_factor_rf2 * self.Spot.dir05 + self.Spot.zero05
-                        current_idx = 4
-                    else:
-                        target_angle_calib = target_angle_deg * self.Spot.angle_scale_factor_rf3 * self.Spot.dir06 + self.Spot.zero06
-                        current_idx = 5
+                 xabs[i] = foot_abs[0]
+                 yabs[i] = foot_abs[1]
+                 zabs[i] = foot_abs[2]
+                          
+            else:
+                 xabs[i] = x_spot[i+2]
+                 yabs[i] = y_spot[i+2]
+                 zabs[i] = 0
+                 
+                 #relative foot position of foot on the ground/floor for inverse kinematics
+                 leg = Spot.new_coordinates(self,Msi_updated,xabs[i]-x_framecorner[i],yabs[i]-y_framecorner[i],zabs[i]-z_framecorner[i],0,0,0)
+                 xleg[i] = leg[0]
+                 yleg[i] = leg[1]
+                 zleg[i] = leg[2]
+                 
+         x_spot_updated =  [foot_center[0],x_framecenter_comp, xabs[0], xabs[1], xabs[2], xabs[3],x_spot[6],x_spot[7],x_spot[8],x_spot[9]] 
+         y_spot_updated =  [foot_center[1],y_framecenter_comp, yabs[0], yabs[1], yabs[2], yabs[3],y_spot[6],y_spot[7],y_spot[8],y_spot[9]] 
+         z_spot_updated =  [foot_center[2],z_framecenter_comp, zabs[0], zabs[1], zabs[2], zabs[3],z_spot[6],z_spot[7],z_spot[8],z_spot[9]] 
+         
+         
+         pos = [xleg[0],yleg[0],zleg[0],xleg[1],yleg[1],zleg[1],xleg[2],yleg[2],zleg[2],xleg[3],yleg[3],zleg[3],theta_spot_updated,x_spot_updated,y_spot_updated,z_spot_updated]    
+         return pos
 
-                    current_angle = self.current_servo_angles[current_idx]
-                    smoothed_angle = current_angle * (1 - servo_smoothing) + target_angle_calib * servo_smoothing
-                    self.current_servo_angles[current_idx] = smoothed_angle
+    def moving (self,t, start_frame_pos,end_frame_pos, pos):
+        
+        theta_spot_updated = pos[12]
+        x_spot_updated =  pos[13]
+        y_spot_updated =  pos[14]
+        z_spot_updated =  pos[15]
+        
+    
+        #interpolate new frame position 
+        frame_pos = np.zeros(6)
+        
+        for i in range (0,6):
+            frame_pos[i] = start_frame_pos[i]  + (end_frame_pos[i]- start_frame_pos[i])*t
+        
+        theta_spot_updated [3] = frame_pos[0]
+        theta_spot_updated [4] = frame_pos[1]
+        theta_spot_updated [5] = frame_pos[2]
+        #rotation matrix for frame position
+        Mf = Spot.xyz_rotation_matrix (self,frame_pos[0],frame_pos[1],frame_pos[2],False)
+        
+        #rotation matrix for spot position (only around z axis)
+        Ms = Spot.xyz_rotation_matrix (self,0,0,theta_spot_updated[2],False)
+        
+        # frame corners position coordinaterelative to frame center
+        x_frame = [Spot.xlf, Spot.xrf, Spot.xrr, Spot.xlr]
+        y_frame = [Spot.ylf, Spot.yrf, Spot.yrr, Spot.ylr]
+        z_frame = [0,0,0,0]
+        
+        #New absolute frame center position
+        frame_center_abs = Spot.new_coordinates(self,Ms,frame_pos[3],frame_pos[4],frame_pos[5],x_spot_updated[0],y_spot_updated[0],z_spot_updated[0])
+   
+        #absolute frame corners position coordinates  
+        x_frame_corner_abs = np.zeros(4)
+        y_frame_corner_abs = np.zeros(4)
+        z_frame_corner_abs = np.zeros(4)
+                    
+        for i in range (0,4):
+            frame_corner = Spot.new_coordinates(self,Mf,x_frame[i],y_frame[i],z_frame[i],0,0,0)
+            frame_corner_abs = Spot.new_coordinates(self,Ms,frame_corner[0],frame_corner[1],frame_corner[2],frame_center_abs[0],frame_center_abs[1],frame_center_abs[2])
+            x_frame_corner_abs[i] = frame_corner_abs[0]
+            y_frame_corner_abs[i] = frame_corner_abs[1]
+            z_frame_corner_abs[i] = frame_corner_abs[2]
+        
+        #calculate current relative position
+        xleg = np.zeros(4)
+        yleg = np.zeros(4)
+        zleg = np.zeros(4)
+               
+        
+        #Leg relative position to front corners
+        Mi = Spot.xyz_rotation_matrix(self,-theta_spot_updated[3],-theta_spot_updated[4],-(theta_spot_updated[2]+theta_spot_updated[5]),True)   
 
-                    try:
-                        self.kit0.servo[self.Spot.servo_table[current_idx]].angle = smoothed_angle
-                    except ValueError:
-                        print(f'Angle out of Range for servo {current_idx}')
+        for i in range (0,4):                        
+            leg = Spot.new_coordinates(self,Mi,x_spot_updated[i+2]-x_frame_corner_abs[i],y_spot_updated[i+2]-y_frame_corner_abs[i],z_spot_updated[i+2]-z_frame_corner_abs[i],0,0,0)
+            xleg[i] = leg[0]
+            yleg[i] = leg[1]
+            zleg[i] = leg[2]
+        
+        
+        x_spot_updated[1] = frame_center_abs [0]     
+        y_spot_updated[1] = frame_center_abs [1]          
+        z_spot_updated[1] = frame_center_abs [2]    
 
-            if not thetarr_reply[1]:
-                for i in range(3):
-                    target_angle_rad = thetarr_reply[0][i]
-                    target_angle_deg = target_angle_rad / pi * 180
-
-                    if i == 0:
-                        target_angle_calib = target_angle_deg * self.Spot.angle_scale_factor_rr1 * self.Spot.dir07 + self.Spot.zero07
-                        current_idx = 6
-                    elif i == 1:
-                        target_angle_calib = target_angle_deg * self.Spot.angle_scale_factor_rr2 * self.Spot.dir08 + self.Spot.zero08
-                        current_idx = 7
-                    else:
-                        target_angle_calib = target_angle_deg * self.Spot.angle_scale_factor_rr3 * self.Spot.dir09 + self.Spot.zero09
-                        current_idx = 8
-
-                    current_angle = self.current_servo_angles[current_idx]
-                    smoothed_angle = current_angle * (1 - servo_smoothing) + target_angle_calib * servo_smoothing
-                    self.current_servo_angles[current_idx] = smoothed_angle
-
-                    try:
-                        self.kit1.servo[self.Spot.servo_table[current_idx]].angle = smoothed_angle
-                    except ValueError:
-                        print(f'Angle out of Range for servo {current_idx}')
-
-            if not thetalr_reply[1]:
-                for i in range(3):
-                    target_angle_rad = thetalr_reply[0][i]
-                    target_angle_deg = target_angle_rad / pi * 180
-
-                    if i == 0:
-                        target_angle_calib = target_angle_deg * self.Spot.angle_scale_factor_lr1 * self.Spot.dir10 + self.Spot.zero10
-                        current_idx = 9
-                    elif i == 1:
-                        target_angle_calib = target_angle_deg * self.Spot.angle_scale_factor_lr2 * self.Spot.dir11 + self.Spot.zero11
-                        current_idx = 10
-                    else:
-                        target_angle_calib = target_angle_deg * self.Spot.angle_scale_factor_lr3 * self.Spot.dir12 + self.Spot.zero12
-                        current_idx = 11
-
-                    current_angle = self.current_servo_angles[current_idx]
-                    smoothed_angle = current_angle * (1 - servo_smoothing) + target_angle_calib * servo_smoothing
-                    self.current_servo_angles[current_idx] = smoothed_angle
-
-                    try:
-                        self.kit1.servo[self.Spot.servo_table[current_idx]].angle = smoothed_angle
-                    except ValueError:
-                        print(f'Angle out of Range for servo {current_idx}')
-
-    # ==================== CLEANUP ====================
-
-    def cleanup(self):
-        """Clean up resources on exit"""
-        print("Cleaning up resources...")
-
-        # Close TCP server
-        if self.tcp_server_socket:
-            try:
-                self.tcp_server_socket.close()
-            except:
-                pass
-
-        # Stop camera
-        if self.camera and hasattr(self.camera, 'stop'):
-            try:
-                self.camera.stop()
-            except:
-                pass
-
-        # Clean up GPIO
-        try:
-            GPIO.cleanup()
-        except:
-            pass
-
-        print("Cleanup complete")
-
-# ======================
-
-#if __name__ == "__main__":
-#controller = SpotMicroController()
-#    print("=== Created controller ===")
-#controller.start()
+                
+        pos = [xleg[0],yleg[0],zleg[0],xleg[1],yleg[1],zleg[1],xleg[2],yleg[2],zleg[2],xleg[3],yleg[3],zleg[3],theta_spot_updated,x_spot_updated,y_spot_updated,z_spot_updated]    
+        return pos
+        
+        
+    
