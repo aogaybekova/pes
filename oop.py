@@ -170,6 +170,10 @@ class SpotMicroController:
         self.Angle_old = np.zeros(2)
         self.Integral_Angle = [0, 0]
 
+        # for shift and pee
+        self.ra_longi = 30
+        self.ra_lat = 30
+
         # == Positions (body, legs)
         self.pos_init = [-self.x_offset, self.track4, -self.b_height, -self.x_offset, -self.track4, -self.b_height,
                          -self.x_offset, -self.track4, -self.b_height, -self.x_offset, self.track4, -self.b_height]
@@ -864,6 +868,10 @@ class SpotMicroController:
                 self.y_end_shifting = -self.ra_lat
                 start_frame_pos = [0, 0, 0, self.x_offset, 0, self.b_height]
                 end_frame_pos = [0, 0, 0, self.x_end_shifting + self.x_offset, self.y_end_shifting, self.b_height]
+
+                # Bend the left rear leg shin by raising the foot proportionally to animation progress
+                pee_leg_lift = 60  # mm
+                self.pos[15][5] = max(0, pee_leg_lift * self.t)
 
                 self.pos = self.Spot.moving(self.t, start_frame_pos, end_frame_pos, self.pos)
 
