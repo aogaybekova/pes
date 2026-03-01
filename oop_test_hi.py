@@ -471,63 +471,8 @@ class SpotMicroController:
                     remaining_time = min_turn_duration - elapsed_turn_time
                     print(f" Turn in progress ({elapsed_turn_time:.2f}s / {min_turn_duration}s), {remaining_time:.2f}s remaining...")
 
-            # Initialize obstacle avoidance state if not present
-            if not hasattr(self, 'avoiding_obstacle'):
-                self.avoiding_obstacle = False
-                self.avoidance_turn_direction = None
-
-            # Check if obstacle detected
-            obstacle_threshold = 30  # cm (actual distance after correction)
-            left_blocked = 0 < self.last_left_distance < obstacle_threshold
-            right_blocked = 0 < self.last_right_distance < obstacle_threshold
-
-            if left_blocked or right_blocked:
-                self.obstacle_detected = True
-
-                # If not yet avoiding, determine turn direction and transition to neutral if needed
-                if not self.avoiding_obstacle:
-                    print("Obstacle detected, transitioning to avoidance mode")
-                    self.avoiding_obstacle = True
-
-                    # Determine which way to turn
-                    if left_blocked and not right_blocked:
-                        self.avoidance_turn_direction = "turn_right"
-                        print("Obstacle on left, will turn right")
-                    elif right_blocked and not left_blocked:
-                        self.avoidance_turn_direction = "turn_left"
-                        print("Obstacle on right, will turn left")
-                    else:
-                        # Both blocked, turn to less blocked side
-                        if self.last_left_distance > self.last_right_distance:
-                            self.avoidance_turn_direction = "turn_left"
-                            print("Obstacles detected, turning left (clearer)")
-                        else:
-                            self.avoidance_turn_direction = "turn_right"
-                            print("Obstacles detected, turning right (clearer)")
-
-                    # Stop forward movement and start turning
-                    self.current_movement_command = "stop"
-                    self.accept_command("stop_walk")
-
-                # Continue turning in the chosen direction
-                if self.avoiding_obstacle and self.avoidance_turn_direction:
-                    if self.current_movement_command != self.avoidance_turn_direction:
-                        print(f"Continuing to {self.avoidance_turn_direction}")
-                        self.accept_command(self.avoidance_turn_direction)
-            else:
-                # Obstacle cleared
-                self.obstacle_detected = False
-
-                # If we were avoiding an obstacle, transition back to forward
-                if self.avoiding_obstacle:
-                    print("Obstacle cleared, transitioning back to forward movement")
-                    self.avoiding_obstacle = False
-                    self.avoidance_turn_direction = None
-
-                    # Transition: stop turning, then go forward
-                    self.accept_command("stop_walk")
-                    # Queue forward command to execute after stop completes
-                    self.accept_command("forward")
+            elif self.current_movement_command == "forward":
+                pass  # Both sensors clear, continue forward normally
 
     def handle_touch_event(self):
         """Handle touch sensor reaction: Stop -> Sit -> Give Paw (hold for 10 seconds)"""
