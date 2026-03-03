@@ -345,172 +345,80 @@ class SpotMicroController:
             self.touch_detected = False
 
     def handle_obstacle_avoidance(self):
-        """Handle obstacle avoidance - keep turning until obstacle is clear"""
-        # Only process if we were trying to move forward or are in obstacle avoidance mode
-        if self.current_movement_command != "forward" and not hasattr(self, 'avoiding_obstacle'):
-            return
-    
+        """Handle obstacle avoidance - turn continuously, poll sensors every 5 seconds.
+        
+        Logic:
+        1. Going forward, detects obstacle within critical radius (20cm) -> starts turning
+        2. While turning, polls read_sensors() every 5 seconds without stopping
+        3. If obstacle is NOT within critical radius (20cm) -> stops turning, goes forward
+        """
         # Initialize obstacle avoidance state if not present
         if not hasattr(self, 'avoiding_obstacle'):
             self.avoiding_obstacle = False
             self.avoidance_turn_direction = None
-            self.turn_start_time = 0
-            self.obstacle_confirmed = False
-    
-        # Check if obstacle detected
-        obstacle_threshold = 30  # cm (actual distance after correction)
-        left_blocked = 0 < self.last_left_distance < obstacle_threshold
-        right_blocked = 0 < self.last_right_distance < obstacle_threshold
-    
-        if left_blocked or right_blocked:
-            self.obstacle_detected = True
-    
-            if not self.avoiding_obstacle:
-                current_time = time()
-                
-                # Первое обнаружение - ждем подтверждения
-                if not hasattr(self, 'first_obstacle_detection_time'):
-                    self.first_obstacle_detection_time = current_time
-                    print(" Obstacle detected, confirming...")
-                    return
-                
-                # Проверяем подтверждение
-                confirmation_time = 0.15
-                if current_time - self.first_obstacle_detection_time < confirmation_time:
-                    return
-                
-                # Препятствие подтверждено
-                print("Obstacle CONFIRMED")
-                self.avoiding_obstacle = True
-                self.obstacle_confirmed = True
-                self.turn_start_time = current_time
-    
-                # Определяем направление поворота
-                if left_blocked and not right_blocked:
-                    self.avoidance_turn_direction = "turn_right"
-                    print(f"Turning RIGHT (left blocked: {self.last_left_distance:.1f}cm)")
-                elif right_blocked and not left_blocked:
-                    self.avoidance_turn_direction = "turn_left"
-                    print(f" Turning LEFT (right blocked: {self.last_right_distance:.1f}cm)")
-                else:
-                    # Оба заблокированы - поворачиваем в сторону с большим расстоянием
-                    if self.last_left_distance > self.last_right_distance:
-                        self.avoidance_turn_direction = "turn_left"
-                        print(f" Turning LEFT (less blocked: L={self.last_left_distance:.1f} > R={self.last_right_distance:.1f})")
-                    else:
-                        self.avoidance_turn_direction = "turn_right"
-                        print(f" Turning RIGHT (less blocked: R={self.last_right_distance:.1f} > L={self.last_left_distance:.1f})")
-    
-                # Начинаем поворот БЕЗ остановки
-                self.accept_command(self.avoidance_turn_direction)
-            else:
-                # Уже поворачиваем - продолжаем если команда поворота завершилась
-                if self.current_movement_command != self.avoidance_turn_direction:
-                    print(f" Continuing {self.avoidance_turn_direction} (obstacle still present)")
-                    self.accept_command(self.avoidance_turn_direction)
-        else:
-            # Препятствие исчезло
-            self.obstacle_detected = False
-    
-            # Сбрасываем таймер первого обнаружения
-            if hasattr(self, 'first_obstacle_detection_time'):
-                delattr(self, 'first_obstacle_detection_time')
-    
-            if self.avoiding_obstacle:
-                # Проверяем: было ли препятствие подтверждено?
-                if not self.obstacle_confirmed:
-                    print("False alarm - ignoring (obstacle disappeared before confirmation)")
+            self.last_avoidance_sensor_check = 0
+
+        # Critical obstacle threshold
+        obstacle_threshold = 20  # cm
+
+        if self.avoiding_obstacle:
+            # Already turning - poll sensors every 5 seconds
+            current_time = time()
+            if current_time - self.last_avoidance_sensor_check >= 5:
+                self.last_avoidance_sensor_check = current_time
+                self.read_sensors()
+
+                left_blocked = 0 < self.last_left_distance < obstacle_threshold
+                right_blocked = 0 < self.last_right_distance < obstacle_threshold
+
+                if not left_blocked and not right_blocked:
+                    # Obstacle cleared - stop turning and go forward
+                    print(f"Obstacle cleared (L={self.last_left_distance:.1f}cm, R={self.last_right_distance:.1f}cm)")
+                    print("Stopping turn and transitioning to forward movement...")
                     self.avoiding_obstacle = False
                     self.avoidance_turn_direction = None
-                    self.turn_start_time = 0
-                    return
-                
-                # Минимальное время поворота
-                min_turn_duration = 0.5
-                elapsed_turn_time = time() - self.turn_start_time
-                
-                if elapsed_turn_time >= min_turn_duration:
-                    print(f" Obstacle cleared after {elapsed_turn_time:.2f}s turn")
-                    print(" Stopping turn and transitioning to forward movement...")
-                    
-                    # Сбрасываем флаги избегания препятствий
-                    self.avoiding_obstacle = False
-                    self.avoidance_turn_direction = None
-                    self.turn_start_time = 0
-                    self.obstacle_confirmed = False
-    
-                    # ВАЖНО: Последовательность команд для плавного перехода
-                    # 1. Останавливаем поворот
+                    self.obstacle_detected = False
                     self.accept_command("stop_walk")
-                    
-                    # 2. НЕ нужно добавлять sleep здесь - это заблокирует main_loop
-                    # 3. Команда forward будет обработана в следующем цикле
-                    #    и автоматически вызовет transition_to_neutral() если нужно
                     self.accept_command("forward")
-                    
-                    print(" Commands queued: stop_walk → forward")
                 else:
-                    # Поворот начался недавно - продолжаем
-                    remaining_time = min_turn_duration - elapsed_turn_time
-                    print(f" Turn in progress ({elapsed_turn_time:.2f}s / {min_turn_duration}s), {remaining_time:.2f}s remaining...")
-    
-            # Initialize obstacle avoidance state if not present
-            if not hasattr(self, 'avoiding_obstacle'):
-                self.avoiding_obstacle = False
-                self.avoidance_turn_direction = None
-    
-            # Check if obstacle detected
-            obstacle_threshold = 30  # cm (actual distance after correction)
-            left_blocked = 0 < self.last_left_distance < obstacle_threshold
-            right_blocked = 0 < self.last_right_distance < obstacle_threshold
-    
-            if left_blocked or right_blocked:
-                self.obstacle_detected = True
-    
-                # If not yet avoiding, determine turn direction and transition to neutral if needed
-                if not self.avoiding_obstacle:
-                    print("Obstacle detected, transitioning to avoidance mode")
-                    self.avoiding_obstacle = True
-    
-                    # Determine which way to turn
-                    if left_blocked and not right_blocked:
-                        self.avoidance_turn_direction = "turn_right"
-                        print("Obstacle on left, will turn right")
-                    elif right_blocked and not left_blocked:
-                        self.avoidance_turn_direction = "turn_left"
-                        print("Obstacle on right, will turn left")
-                    else:
-                        # Both blocked, turn to less blocked side
-                        if self.last_left_distance > self.last_right_distance:
-                            self.avoidance_turn_direction = "turn_left"
-                            print("Obstacles detected, turning left (clearer)")
-                        else:
-                            self.avoidance_turn_direction = "turn_right"
-                            print("Obstacles detected, turning right (clearer)")
-    
-                    # Stop forward movement and start turning
-                    self.current_movement_command = "stop"
-                    self.accept_command("stop_walk")
-    
-                # Continue turning in the chosen direction
-                if self.avoiding_obstacle and self.avoidance_turn_direction:
+                    # Obstacle still present - continue turning
+                    print(f"Obstacle still present (L={self.last_left_distance:.1f}cm, R={self.last_right_distance:.1f}cm), continuing turn")
                     if self.current_movement_command != self.avoidance_turn_direction:
-                        print(f"Continuing to {self.avoidance_turn_direction}")
                         self.accept_command(self.avoidance_turn_direction)
             else:
-                # Obstacle cleared
-                self.obstacle_detected = False
-    
-                # If we were avoiding an obstacle, transition back to forward
-                if self.avoiding_obstacle:
-                    print("Obstacle cleared, transitioning back to forward movement")
-                    self.avoiding_obstacle = False
-                    self.avoidance_turn_direction = None
-    
-                    # Transition: stop turning, then go forward
-                    self.accept_command("stop_walk")
-                    # Queue forward command to execute after stop completes
-                    self.accept_command("forward")
+                # Between 5-second checks, ensure turn command is still active
+                if self.current_movement_command != self.avoidance_turn_direction:
+                    self.accept_command(self.avoidance_turn_direction)
+        else:
+            # Not yet avoiding - only process if moving forward
+            if self.current_movement_command != "forward":
+                return
+
+            left_blocked = 0 < self.last_left_distance < obstacle_threshold
+            right_blocked = 0 < self.last_right_distance < obstacle_threshold
+
+            if left_blocked or right_blocked:
+                self.obstacle_detected = True
+                self.avoiding_obstacle = True
+                self.last_avoidance_sensor_check = time()
+
+                # Determine turn direction
+                if left_blocked and not right_blocked:
+                    self.avoidance_turn_direction = "turn_right"
+                    print(f"Obstacle detected! Turning RIGHT (left blocked: {self.last_left_distance:.1f}cm)")
+                elif right_blocked and not left_blocked:
+                    self.avoidance_turn_direction = "turn_left"
+                    print(f"Obstacle detected! Turning LEFT (right blocked: {self.last_right_distance:.1f}cm)")
+                else:
+                    # Both blocked - turn to less blocked side
+                    if self.last_left_distance > self.last_right_distance:
+                        self.avoidance_turn_direction = "turn_left"
+                    else:
+                        self.avoidance_turn_direction = "turn_right"
+                    print(f"Obstacle detected on both sides! Turning {self.avoidance_turn_direction} (L={self.last_left_distance:.1f}cm, R={self.last_right_distance:.1f}cm)")
+
+                # Start turning without stopping
+                self.accept_command(self.avoidance_turn_direction)
 
     def handle_touch_event(self):
         """Handle touch sensor reaction: Stop -> Sit -> Give Paw (hold for 10 seconds)"""
