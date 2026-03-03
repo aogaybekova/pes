@@ -62,16 +62,13 @@ class SpotMicroController:
         #self.mpu = mpu6050.MPU6050(0x68, bus=1)
 
         # == Display
-        # ÐÑÐºÐ»ÑÑÐ°ÐµÐ¼ Ð°Ð¿Ð¿Ð°ÑÐ°ÑÐ½Ð¾Ðµ ÑÑÐºÐ¾ÑÐµÐ½Ð¸Ðµ Ð´Ð»Ñ Ð¸Ð·Ð±ÐµÐ¶Ð°Ð½Ð¸Ñ Ð¿ÑÐ¾Ð±Ð»ÐµÐ¼ Ñ OpenGL
         os.environ['SDL_VIDEO_X11_NOWINDOWMOVE'] = '1'
         pygame.init()
         print("=== Controller __init__ END ===")
 
-        # ÐÑÐ¿ÑÐ°Ð²Ð»ÑÐµÐ¼ Ð¸Ð½Ð¸ÑÐ¸Ð°Ð»Ð¸Ð·Ð°ÑÐ¸Ñ Ð´Ð¸ÑÐ¿Ð»ÐµÑ
         self.screen = pygame.display.set_mode((600, 600))
         pygame.display.set_caption("SPOTMICRO CONSOLE CONTROL")
 
-        # Ð¦Ð²ÐµÑÐ° Ð´Ð»Ñ Ð¸Ð½ÑÐµÑÑÐµÐ¹ÑÐ°
         self.BLACK = (0, 0, 0)
         self.WHITE = (255, 255, 255)
         self.RED = (255, 0, 0)
@@ -94,8 +91,10 @@ class SpotMicroController:
         self.walking = False
         self.trot = False
         self.sitting = False
+        self._strafe_trot_applied = False
         self.lying = False
         self.twisting = False
+        self.twist_queue_count = 0
         self.shifting = False
         self.pawing = False
         #test hi
@@ -122,12 +121,11 @@ class SpotMicroController:
         # == Walking params
         self.b_height = 220
         self.x_offset = 0
-        self.track2, self.track4 = 58, 58  # Ð¨Ð¸ÑÐ¸Ð½Ð° Ð¿Ð¾ÑÑÐ°Ð½Ð¾Ð²ÐºÐ¸ Ð½Ð¾Ð³ (Y-ÐºÐ¾Ð¾ÑÐ´Ð¸Ð½Ð°ÑÐ°)
-        self.h_amp2, self.h_amp4 = 100, 60 #80  # ÐÐ¾ÑÐ¸Ð·Ð¾Ð½ÑÐ°Ð»ÑÐ½Ð°Ñ Ð°Ð¼Ð¿Ð»Ð¸ÑÑÐ´Ð° Ð´Ð²Ð¸Ð¶ÐµÐ½Ð¸Ñ Ð½Ð¾Ð³ (X-Ð½Ð°Ð¿ÑÐ°Ð²Ð»ÐµÐ½Ð¸Ðµ)
-        self.v_amp2, self.v_amp4 = 20, 45 #25 # ÐÐµÑÑÐ¸ÐºÐ°Ð»ÑÐ½Ð°Ñ Ð°Ð¼Ð¿Ð»Ð¸ÑÑÐ´Ð° Ð¿Ð¾Ð´ÑÐµÐ¼Ð° Ð½Ð¾Ð³ (Z-Ð½Ð°Ð¿ÑÐ°Ð²Ð»ÐµÐ½Ð¸Ðµ)
-        #Ð´Ð»Ð¸Ð½a ÑÐ°Ð³Ð°
-        self.stepl2, self.stepl4 = 0.16, 0.125 #was 0.2#08#0.125 # Ð¡ÐÐÐ ÐÐ¡Ð¢Ð¬ ÐÐÐ ÐÐÐÐ©ÐÐÐÐ¯ Ð¢ÐÐÐ
-        self.tstep2, self.tstep4 = self.stepl2 / 8, 0.015 #0.8 #0.012 #6666666666 # Ð²ÑÐµÐ¼Ñ ÑÐ°Ð³Ð°
+        self.track2, self.track4 = 58, 58  #
+        self.h_amp2, self.h_amp4 = 100, 80 #80
+        self.v_amp2, self.v_amp4 = 20, 45 #25
+        self.stepl2, self.stepl4 = 0.16, 0.125 #was 0.2#08#0.125 #
+        self.tstep2, self.tstep4 = self.stepl2 / 8, 0.015 #0.8 #0.012 #6666666666
         self.track = self.track4
         self.h_amp = self.h_amp4
         self.v_amp = self.v_amp4
@@ -144,20 +142,17 @@ class SpotMicroController:
         self.current_movement_command = "stop"
         self.current_servo_angles = [0.0] * 12
         self.speed_smoothing = 0.3
-        # ÐÐ°ÑÐ°Ð¼ÐµÑÑÑ ÑÑÐ°Ð±Ð¸Ð»Ð¸Ð·Ð°ÑÐ¸Ð¸
+
         self.cg_stabilization_enabled = True
-        self.imu_stabilization_enabled = True  # ÐÐ¾Ð±Ð°Ð²Ð»ÑÐµÐ¼ Ð¾ÑÐ´ÐµÐ»ÑÐ½ÑÐ¹ ÑÐ»Ð°Ð³ Ð´Ð»Ñ IMU
+        self.imu_stabilization_enabled = True  #IMU
 
-        # ÐÐ¾Ð»ÐµÐµ ÐºÐ¾Ð½ÑÐµÑÐ²Ð°ÑÐ¸Ð²Ð½ÑÐµ Ð¿Ð°ÑÐ°Ð¼ÐµÑÑÑ ÑÑÐ°Ð±Ð¸Ð»Ð¸Ð·Ð°ÑÐ¸Ð¸
-        self.max_cg_offset_x = 10  # Ð£Ð¼ÐµÐ½ÑÑÐµÐ½Ð¾ Ñ 15
-        self.max_cg_offset_y = 8   # Ð£Ð¼ÐµÐ½ÑÑÐµÐ½Ð¾ Ñ 10
-        self.max_leg_adjustment = 20  # ÐÐ°ÐºÑÐ¸Ð¼Ð°Ð»ÑÐ½Ð°Ñ ÐºÐ¾ÑÑÐµÐºÑÐ¸ÑÐ¾Ð²ÐºÐ° Ð½Ð¾Ð³Ð¸ (Ð¼Ð¼)
+        self.max_cg_offset_x = 10  # 15
+        self.max_cg_offset_y = 8   # 10
+        self.max_leg_adjustment = 20  #
 
-        # ÐÐ»Ð°Ð²Ð½Ð°Ñ ÑÐ¸Ð»ÑÑÑÐ°ÑÐ¸Ñ
-        self.body_filter_alpha = 0.2  # ÐÐ¾Ð»ÐµÐµ ÑÐ¸Ð»ÑÐ½Ð¾Ðµ ÑÐ³Ð»Ð°Ð¶Ð¸Ð²Ð°Ð½Ð¸Ðµ
-        self.leg_filter_alpha = 0.3   # Ð¤Ð¸Ð»ÑÑÑ Ð´Ð»Ñ Ð½Ð¾Ð³
+        self.body_filter_alpha = 0.2  #
+        self.leg_filter_alpha = 0.3   #
 
-        # ÐÐ½Ð¸ÑÐ¸Ð°Ð»Ð¸Ð·Ð°ÑÐ¸Ñ ÑÐ¸Ð»ÑÑÑÐ¾Ð²
         self.filtered_body_x = 0
         self.filtered_body_y = 0
         self.filtered_body_z = self.b_height
@@ -360,172 +355,80 @@ class SpotMicroController:
             self.touch_detected = False
 
     def handle_obstacle_avoidance(self):
-        """Handle obstacle avoidance - keep turning until obstacle is clear"""
+        """Handle obstacle avoidance - turn continuously, poll sensors every 5 seconds.
+        
+        Logic:
+        1. Going forward, detects obstacle within critical radius (20cm) -> starts turning
+        2. While turning, polls read_sensors() every 5 seconds without stopping
+        3. If obstacle is NOT within critical radius (20cm) -> stops turning, goes forward
+        """
         # Initialize obstacle avoidance state if not present
         if not hasattr(self, 'avoiding_obstacle'):
             self.avoiding_obstacle = False
             self.avoidance_turn_direction = None
-            self.turn_start_time = 0
-            self.obstacle_confirmed = False
+            self.last_avoidance_sensor_check = 0
 
-        # Only process if we were trying to move forward or are in obstacle avoidance mode
-        if self.current_movement_command != "forward" and not self.avoiding_obstacle:
-            return
+        # Critical obstacle threshold
+        obstacle_threshold = 20  # cm
 
-        # Check if obstacle object detected
-        obstacle_threshold = 20  # cm (actual distance after correction)
-        left_blocked = 0 < self.last_left_distance < obstacle_threshold
-        right_blocked = 0 < self.last_right_distance < obstacle_threshold
+        if self.avoiding_obstacle:
+            # Already turning - poll sensors every 5 seconds
+            current_time = time()
+            if current_time - self.last_avoidance_sensor_check >= 5:
+                self.last_avoidance_sensor_check = current_time
+                self.read_sensors()
 
-        if left_blocked or right_blocked:
-            self.obstacle_detected = True
+                left_blocked = 0 < self.last_left_distance < obstacle_threshold
+                right_blocked = 0 < self.last_right_distance < obstacle_threshold
 
-            if not self.avoiding_obstacle:
-                current_time = time()
-
-                # Первое обнаружение - ждем подтверждения
-                if not hasattr(self, 'first_obstacle_detection_time'):
-                    self.first_obstacle_detection_time = current_time
-                    print(" Obstacle detected, confirming...")
-                    return
-
-                # Проверяем подтверждение
-                confirmation_time = 0.15
-                if current_time - self.first_obstacle_detection_time < confirmation_time:
-                    return
-
-                # Препятствие подтверждено
-                print("Obstacle CONFIRMED")
-                self.avoiding_obstacle = True
-                self.obstacle_confirmed = True
-                self.turn_start_time = current_time
-
-                # Определяем направление поворота
-                if left_blocked and not right_blocked:
-                    self.avoidance_turn_direction = "turn_right"
-                    print(f"Turning RIGHT (left blocked: {self.last_left_distance:.1f}cm)")
-                elif right_blocked and not left_blocked:
-                    self.avoidance_turn_direction = "turn_left"
-                    print(f" Turning LEFT (right blocked: {self.last_right_distance:.1f}cm)")
+                if not left_blocked and not right_blocked:
+                    # Obstacle cleared - stop turning and go forward
+                    print(f"Obstacle cleared (L={self.last_left_distance:.1f}cm, R={self.last_right_distance:.1f}cm)")
+                    print("Stopping turn and transitioning to forward movement...")
+                    self.avoiding_obstacle = False
+                    self.avoidance_turn_direction = None
+                    self.obstacle_detected = False
+                    self.accept_command("stop_walk")
+                    self.accept_command("forward")
                 else:
-                    # Оба заблокированы - поворачиваем в сторону с большим расстоянием
-                    if self.last_left_distance > self.last_right_distance:
-                        self.avoidance_turn_direction = "turn_left"
-                        print(f" Turning LEFT (less blocked: L={self.last_left_distance:.1f} > R={self.last_right_distance:.1f})")
-                    else:
-                        self.avoidance_turn_direction = "turn_right"
-                        print(f" Turning RIGHT (less blocked: R={self.last_right_distance:.1f} > L={self.last_left_distance:.1f})")
-
-                # Начинаем поворот БЕЗ остановки
-                self.accept_command(self.avoidance_turn_direction)
+                    # Obstacle still present - continue turning
+                    print(f"Obstacle still present (L={self.last_left_distance:.1f}cm, R={self.last_right_distance:.1f}cm), continuing turn")
+                    if self.current_movement_command != self.avoidance_turn_direction:
+                        self.accept_command(self.avoidance_turn_direction)
             else:
-                # Уже поворачиваем - продолжаем если команда поворота завершилась
+                # Between 5-second checks, ensure turn command is still active
                 if self.current_movement_command != self.avoidance_turn_direction:
-                    print(f" Continuing {self.avoidance_turn_direction} (obstacle still present)")
                     self.accept_command(self.avoidance_turn_direction)
         else:
-            # Препятствие исчезло
-            self.obstacle_detected = False
+            # Not yet avoiding - only process if moving forward
+            if self.current_movement_command != "forward":
+                return
 
-            # Сбрасываем таймер первого обнаружения
-            if hasattr(self, 'first_obstacle_detection_time'):
-                delattr(self, 'first_obstacle_detection_time')
-
-            if self.avoiding_obstacle:
-                # Проверяем: было ли препятствие подтверждено?
-                if not self.obstacle_confirmed:
-                    print("False alarm - ignoring (obstacle disappeared before confirmation)")
-                    self.avoiding_obstacle = False
-                    self.avoidance_turn_direction = None
-                    self.turn_start_time = 0
-                    return
-
-                # Минимальное время поворота
-                min_turn_duration = 0.5
-                elapsed_turn_time = time() - self.turn_start_time
-
-                if elapsed_turn_time >= min_turn_duration:
-                    print(f" Obstacle cleared after {elapsed_turn_time:.2f}s turn")
-                    print(" Stopping turn and transitioning to forward movement...")
-
-                    # Сбрасываем флаги избегания препятствий
-                    self.avoiding_obstacle = False
-                    self.avoidance_turn_direction = None
-                    self.turn_start_time = 0
-                    self.obstacle_confirmed = False
-
-                    # ВАЖНО: Последовательность команд для плавного перехода
-                    # 1. Останавливаем поворот
-                    self.accept_command("stop_walk")
-
-                    # 2. НЕ нужно добавлять sleep здесь - это заблокирует main_loop
-                    # 3. Команда forward будет обработана в следующем цикле
-                    #    и автоматически вызовет transition_to_neutral() если нужно
-                    self.accept_command("forward")
-
-                    print(" Commands queued: stop_walk → forward")
-                else:
-                    # Поворот начался недавно - продолжаем
-                    remaining_time = min_turn_duration - elapsed_turn_time
-                    print(f" Turn in progress ({elapsed_turn_time:.2f}s / {min_turn_duration}s), {remaining_time:.2f}s remaining...")
-
-            # Initialize obstacle avoidance state if not present
-            if not hasattr(self, 'avoiding_obstacle'):
-                self.avoiding_obstacle = False
-                self.avoidance_turn_direction = None
-
-            # Check if obstacle detected
-            obstacle_threshold = 30  # cm (actual distance after correction)
             left_blocked = 0 < self.last_left_distance < obstacle_threshold
             right_blocked = 0 < self.last_right_distance < obstacle_threshold
 
             if left_blocked or right_blocked:
                 self.obstacle_detected = True
+                self.avoiding_obstacle = True
+                self.last_avoidance_sensor_check = time()
 
-                # If not yet avoiding, determine turn direction and transition to neutral if needed
-                if not self.avoiding_obstacle:
-                    print("Obstacle detected, transitioning to avoidance mode")
-                    self.avoiding_obstacle = True
-
-                    # Determine which way to turn
-                    if left_blocked and not right_blocked:
-                        self.avoidance_turn_direction = "turn_right"
-                        print("Obstacle on left, will turn right")
-                    elif right_blocked and not left_blocked:
+                # Determine turn direction
+                if left_blocked and not right_blocked:
+                    self.avoidance_turn_direction = "turn_right"
+                    print(f"Obstacle detected! Turning RIGHT (left blocked: {self.last_left_distance:.1f}cm)")
+                elif right_blocked and not left_blocked:
+                    self.avoidance_turn_direction = "turn_left"
+                    print(f"Obstacle detected! Turning LEFT (right blocked: {self.last_right_distance:.1f}cm)")
+                else:
+                    # Both blocked - turn to less blocked side
+                    if self.last_left_distance > self.last_right_distance:
                         self.avoidance_turn_direction = "turn_left"
-                        print("Obstacle on right, will turn left")
                     else:
-                        # Both blocked, turn to less blocked side
-                        if self.last_left_distance > self.last_right_distance:
-                            self.avoidance_turn_direction = "turn_left"
-                            print("Obstacles detected, turning left (clearer)")
-                        else:
-                            self.avoidance_turn_direction = "turn_right"
-                            print("Obstacles detected, turning right (clearer)")
+                        self.avoidance_turn_direction = "turn_right"
+                    print(f"Obstacle detected on both sides! Turning {self.avoidance_turn_direction} (L={self.last_left_distance:.1f}cm, R={self.last_right_distance:.1f}cm)")
 
-                    # Stop forward movement and start turning
-                    self.current_movement_command = "stop"
-                    self.accept_command("stop_walk")
-
-                # Continue turning in the chosen direction
-                if self.avoiding_obstacle and self.avoidance_turn_direction:
-                    if self.current_movement_command != self.avoidance_turn_direction:
-                        print(f"Continuing to {self.avoidance_turn_direction}")
-                        self.accept_command(self.avoidance_turn_direction)
-            else:
-                # Obstacle cleared
-                self.obstacle_detected = False
-
-                # If we were avoiding an obstacle, transition back to forward
-                if self.avoiding_obstacle:
-                    print("Obstacle cleared, transitioning back to forward movement")
-                    self.avoiding_obstacle = False
-                    self.avoidance_turn_direction = None
-
-                    # Transition: stop turning, then go forward
-                    self.accept_command("stop_walk")
-                    # Queue forward command to execute after stop completes
-                    self.accept_command("forward")
+                # Start turning without stopping
+                self.accept_command(self.avoidance_turn_direction)
 
     def handle_touch_event(self):
         """Handle touch sensor reaction: Stop -> Sit -> Give Paw (hold for 10 seconds)"""
@@ -800,6 +703,12 @@ class SpotMicroController:
             self.current_movement_command = "stop"
             self.heading_offset = 0
             self.transition_start_frame = None
+            if self._strafe_trot_applied and not self.trot:
+                self.stepl = self.stepl4
+                self.h_amp = self.h_amp4
+                self.v_amp = self.v_amp4
+                self.tstep = self.tstep4
+                self._strafe_trot_applied = False
 
             # Reset leg positions to initial standing
             self.pos_init = [-self.x_offset, self.track, -self.b_height,
@@ -997,6 +906,7 @@ class SpotMicroController:
                     self.shifting = False
                     self.pawing = False
                     self.hi_mode = False
+                    self.twist_queue_count = 0
                     self.hi_phase = 0
                     self.hi_t = 0.0
                     self.ztrf = 3
@@ -1097,15 +1007,24 @@ class SpotMicroController:
                         self.lock = True
                         self.current_action = "Twisting"
 
+                elif command == "twist_3":
+                    if not self.twisting and self.Free:
+                        self.twisting = True
+                        self.Free = False
+                        self.t = 0
+                        self.lock = True
+                        self.twist_queue_count = 2
+                        self.current_action = "Twisting (1/3)"
+
                 elif command == "stab_off":
                     self.cg_stabilization_enabled = False
                     self.imu_stabilization_enabled = False
-                    print("Ð¡ÑÐ°Ð±Ð¸Ð»Ð¸Ð·Ð°ÑÐ¸Ñ Ð¿Ð¾Ð»Ð½Ð¾ÑÑÑÑ Ð¾ÑÐºÐ»ÑÑÐµÐ½Ð°")
+                    print("imu stabilization enabled")
 
                 elif command == "stab_on":
                     self.cg_stabilization_enabled = True
                     self.imu_stabilization_enabled = True
-                    print("Ð¡ÑÐ°Ð±Ð¸Ð»Ð¸Ð·Ð°ÑÐ¸Ñ Ð²ÐºÐ»ÑÑÐµÐ½Ð°")
+                    print("imu stabilization disabled")
 
                 elif command == "paw_left":
                     if self.sitting and self.t >= 0.99:
@@ -1188,8 +1107,8 @@ class SpotMicroController:
                         self.current_action = "Photo captured"
                     else:
                         self.current_action = "Photo capture failed"
-                        
-                        
+
+
                 elif command == "hi":
                     if self.sitting and self.Free and self.t >= 0.99 and not self.hi_mode:
                         # From sitting: raise RF paw then wave last servo
@@ -1214,7 +1133,7 @@ class SpotMicroController:
                         print("=== HI COMMAND (standing) ===")
                     else:
                         print("Hi command not available in current state.")
-                        
+
                 else:
                     print(f"Unknown command: {command}")
                     print(
@@ -1232,22 +1151,12 @@ class SpotMicroController:
                 self.frame_counter = 0
             self.frame_counter += 1
 
-            #if self.frame_counter % 100 == 0 and self.walking:
-                #print(f"=== ÐÑÐ»Ð°Ð´Ð¾ÑÐ½Ð°Ñ Ð¸Ð½ÑÐ¾ÑÐ¼Ð°ÑÐ¸Ñ (ÐºÐ°Ð´Ñ {self.frame_counter}) ===")
-                #print(f"ÐÐ¾Ð·Ð¸ÑÐ¸Ð¸ Ð½Ð¾Ð³ (Z): LF={self.pos[2]:.1f}, RF={self.pos[5]:.1f}, RR={self.pos[8]:.1f}, LR={self.pos[11]:.1f}")
-                #print(f"Ð£Ð³Ð»Ñ IMU: roll={self.Angle[0]*180/pi:.1f}Â°, pitch={self.Angle[1]*180/pi:.1f}Â°")
-                #if hasattr(self, 'CGabs'):
-                #    print(f"Ð¦ÐµÐ½ÑÑ ÑÑÐ¶ÐµÑÑÐ¸: X={self.CGabs[0]:.1f}, Y={self.CGabs[1]:.1f}")
-
-            # ÐÑÐ¸ÑÐ°ÐµÐ¼ ÑÐºÑÐ°Ð½ Ð² Ð½Ð°ÑÐ°Ð»Ðµ ÐºÐ°Ð¶Ð´Ð¾Ð³Ð¾ ÐºÐ°Ð´ÑÐ°
             self.screen.fill(self.BLACK)
 
-            # ÐÑÐ¾Ð±ÑÐ°Ð¶Ð°ÐµÐ¼ Ð¸Ð½ÑÐ¾ÑÐ¼Ð°ÑÐ¸Ñ Ð¾ ÑÐ¾ÑÑÐ¾ÑÐ½Ð¸Ð¸
             status_font = pygame.font.SysFont('Corbel', 24)
             status_text = status_font.render(f"State: {self.current_action}", True, self.WHITE)
             self.screen.blit(status_text, (10, 10))
 
-            # ÐÑÐ¾Ð±ÑÐ°Ð¶Ð°ÐµÐ¼ Ð¸Ð½ÑÐ¾ÑÐ¼Ð°ÑÐ¸Ñ Ð¾ ÑÐµÐ¶Ð¸Ð¼Ð°Ñ
 
             anim_text = status_font.render(f"Animation: {'ON' if self.anim_flag else 'OFF'}", True, self.WHITE)
             move_text = status_font.render(f"Movement: {'ON' if self.move_flag else 'OFF'}", True, self.WHITE)
@@ -1271,12 +1180,10 @@ class SpotMicroController:
             if self.frame_counter % 30 == 0:
                 self.log_state()
 
-            #Ð¿Ð»Ð°Ð²Ð½Ð¾Ðµ Ð¸Ð·Ð¼ÐµÐ½ÐµÐ½Ð¸Ðµ ÑÐºÐ¾ÑÐ¾ÑÑÐ¸
             if self.walking and hasattr(self, 'target_speed'):
-                # ÐÐ»Ð°Ð²Ð½Ð¾Ðµ Ð´Ð¾ÑÑÐ¸Ð¶ÐµÐ½Ð¸Ðµ ÑÐµÐ»ÐµÐ²Ð¾Ð¹ ÑÐºÐ¾ÑÐ¾ÑÑÐ¸
                 speed_diff = self.target_speed - self.walking_speed
                 if abs(speed_diff) > 1:
-                    self.walking_speed += speed_diff * self.speed_smoothing #0.1  # ÐÐ»Ð°Ð²Ð½Ð¾Ðµ Ð¸Ð·Ð¼ÐµÐ½ÐµÐ½Ð¸Ðµ
+                    self.walking_speed += speed_diff * self.speed_smoothing #0.1
 
             # ---- IMU processing ----
             self.angle = self.comp_filter(self.angle, self.tstep, self.Tcomp)
@@ -1311,35 +1218,62 @@ class SpotMicroController:
                 self.DIR_RIGHT = 0
 
                 if self.current_movement_command == "forward":
-                    #self.walking_speed = 100  # 0.5
+                    self.walking_speed = 130  # 0.5
                     self.walking_direction = self.DIR_FORWARD
                     self.steering = 1e6
                     self.cw = 1
+                    if self._strafe_trot_applied and not self.trot:
+                        self.stepl = self.stepl4
+                        self.h_amp = self.h_amp4
+                        self.v_amp = self.v_amp4
+                        self.tstep = self.tstep4
+                        self._strafe_trot_applied = False
 
                 elif self.current_movement_command == "backward":
                     self.walking_speed = 100
                     self.walking_direction = self.DIR_BACKWARD
                     self.steering = 1e6
                     self.cw = 1
+                    if self._strafe_trot_applied and not self.trot:
+                        self.stepl = self.stepl4
+                        self.h_amp = self.h_amp4
+                        self.v_amp = self.v_amp4
+                        self.tstep = self.tstep4
+                        self._strafe_trot_applied = False
 
                 elif self.current_movement_command == "left":
                     self.walking_speed = 5  # 50
                     self.walking_direction = self.DIR_LEFT
                     self.steering = 1e6
                     self.cw = 1
+                    if not self.trot:
+                        self.stepl = self.stepl2
+                        self.h_amp = self.h_amp2
+                        self.v_amp = self.v_amp2
+                        self.tstep = self.tstep2
+                        self._strafe_trot_applied = True
 
                 elif self.current_movement_command == "right":
                     self.walking_speed = 5  # 50
                     self.walking_direction = self.DIR_RIGHT
                     self.steering = 1e6
                     self.cw = 1
+                    if not self.trot:
+                        self.stepl = self.stepl2
+                        self.h_amp = self.h_amp2
+                        self.v_amp = self.v_amp2
+                        self.tstep = self.tstep2
+                        self._strafe_trot_applied = True
 
                 elif self.current_movement_command == "turn_left":
                     self.walking_speed = 100
-                    self.walking_direction = pi/2
-                    self.steering = 60  # 1000
-                    #self.h_amp=45
+                    self.walking_direction = pi
+                    self.steering = 40  # 1000
+                    self.h_amp=80
                     self.cw = 1
+                    if self._strafe_trot_applied and not self.trot:
+                        self.h_amp = self.h_amp4
+                    self._strafe_trot_applied = False
                     self.stepl=0.08
                     self.tstep=0.02#self.tstep4
                     self.v_amp=60
@@ -1348,8 +1282,11 @@ class SpotMicroController:
                 elif self.current_movement_command == "turn_right":
                     self.walking_speed = 100
                     self.walking_direction = 0
-                    self.steering = 60  # 1000
+                    self.steering = 40  # 1000
                     self.cw = -1
+                    if self._strafe_trot_applied and not self.trot:
+                        self.h_amp = self.h_amp4
+                    self._strafe_trot_applied = False
                     self.stepl=0.08
                     self.tstep=0.02#self.tstep4
                     self.v_amp=60
@@ -1360,6 +1297,12 @@ class SpotMicroController:
                     self.walking_direction = 0
                     self.steering = 1e6
                     self.cw = 1
+                    if self._strafe_trot_applied and not self.trot:
+                        self.stepl = self.stepl4
+                        self.h_amp = self.h_amp4
+                        self.v_amp = self.v_amp4
+                        self.tstep = self.tstep4
+                        self._strafe_trot_applied = False
 
                 # Execute walking command
                 walk_height = self.b_height + 50
@@ -1655,8 +1598,14 @@ class SpotMicroController:
                     self.t = 1
                     self.twisting = False
                     self.Free = True
-                    self.current_action = "Twisting completed"
-                    print("=== TWISTING COMPLETED ===")
+                    #self.current_action = "Twisting completed"
+                    if self.twist_queue_count > 0:
+                        self.twist_queue_count -= 1
+                        self.command_queue.insert(0, "twist")
+                        self.current_action = f"Twisting ({3 - self.twist_queue_count}/3)"
+                    else:
+                        self.current_action = "Twisting completed"
+                       # print("=== TWISTING COMPLETED ===")
 
                 if self.t < 0.25:
                     end_frame_pos = [x_angle_twisting, y_angle_twisting, z_angle_twisting, self.x_offset, 0, self.b_height]
@@ -1673,12 +1622,27 @@ class SpotMicroController:
 
             elif self.shifting:
                 # Shifting/Peeing logic
-                self.x_end_shifting = self.ra_longi
-                self.y_end_shifting = -self.ra_lat
-                start_frame_pos = [0, 0, 0, self.x_offset, 0, self.b_height]
-                end_frame_pos = [0, 0, 0, self.x_end_shifting + self.x_offset, self.y_end_shifting, self.b_height]
+                pee_lat_shift = 50             # Lateral body shift for balance (mm)
+                pee_roll_lean = 12.0 / 180 * pi  # Body roll lean toward support side (rad)
+                pee_leg_lift = 100             # Foot lift height (mm)
+                pee_leg_abduct = 70            # Lateral foot abduction (mm)
 
-                self.pos = self.Spot.moving(self.t, start_frame_pos, end_frame_pos, self.pos)
+                start_frame_pos = [0, 0, 0, self.x_offset, 0, self.b_height]
+                end_frame_pos = [pee_roll_lean, 0, 0,
+                                 self.ra_longi + self.x_offset, -pee_lat_shift, self.b_height]
+
+                if self.t <= 0.5:
+                    # Phase 1: stabilize body - shift weight and lean, leg stays on ground
+                    phase1_t = self.t * 2
+                    self.pos[14][5] = self.Spot.ylr + self.track  # Keep foot at initial y
+                    self.pos[15][5] = 0
+                    self.pos = self.Spot.moving(phase1_t, start_frame_pos, end_frame_pos, self.pos)
+                else:
+                    # Phase 2: raise leg with abduction, body stays at stable pose
+                    phase2_t = (self.t - 0.5) * 2
+                    self.pos[14][5] = self.Spot.ylr + self.track + pee_leg_abduct * phase2_t
+                    self.pos[15][5] = pee_leg_lift * phase2_t
+                    self.pos = self.Spot.moving(1.0, start_frame_pos, end_frame_pos, self.pos)
 
                 if self.stop == False:
                     if self.t < 1:
@@ -1708,7 +1672,7 @@ class SpotMicroController:
                         self.pee_hold_start_time = 0
                         self.current_action = "Shifting completed"
                         print("=== SHIFTING COMPLETED ===")
-                        
+
             elif self.hi_mode and not self.hi_from_sitting:
                 # Standing hi animation: shift body back + raise RF paw + wave last servo + return
                 hi_speed = 4 * self.tstep
@@ -1759,7 +1723,7 @@ class SpotMicroController:
                         self.lock = False
                         self.current_action = "Hi completed"
                         print("=== HI COMPLETED ===")
-                        
+
             elif self.recovering:
                 # print(f"Recover t={t}, stance={stance}, transtep={transtep}")
                 # (Stand/Initial position)
