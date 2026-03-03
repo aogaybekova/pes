@@ -355,15 +355,18 @@ class SpotMicroController:
         """Handle obstacle avoidance - turn continuously, poll sensors every 5 seconds.
         
         Logic:
-        1. Going forward, detects obstacle within critical radius (20cm) -> starts turning
-        2. While turning, polls read_sensors() every 5 seconds without stopping
-        3. If obstacle is NOT within critical radius (20cm) -> stops turning, goes forward
+        1. Going forward, detects obstacle within critical radius (20cm) -> confirms detection
+        2. Confirmation: obstacle must persist for 0.15s to avoid false positives
+        3. Once confirmed, starts turning continuously
+        4. While turning, polls read_sensors() every 5 seconds without stopping
+        5. If obstacle is NOT within critical radius (20cm) -> stops turning, goes forward
         """
         # Initialize obstacle avoidance state if not present
         if not hasattr(self, 'avoiding_obstacle'):
             self.avoiding_obstacle = False
             self.avoidance_turn_direction = None
             self.last_avoidance_sensor_check = 0
+            self.obstacle_confirmed = False
 
         # Critical obstacle threshold
         obstacle_threshold = 20  # cm
@@ -385,6 +388,7 @@ class SpotMicroController:
                     self.avoiding_obstacle = False
                     self.avoidance_turn_direction = None
                     self.obstacle_detected = False
+                    self.obstacle_confirmed = False
                     self.accept_command("stop_walk")
                     self.accept_command("forward")
                 else:
@@ -406,8 +410,28 @@ class SpotMicroController:
 
             if left_blocked or right_blocked:
                 self.obstacle_detected = True
+                current_time = time()
+
+                # Первое обнаружение - ждем подтверждения
+                if not hasattr(self, 'first_obstacle_detection_time'):
+                    self.first_obstacle_detection_time = current_time
+                    print("Obstacle detected, confirming...")
+                    return
+
+                # Проверяем подтверждение (obstacle must persist for 0.15s)
+                confirmation_time = 0.15
+                if current_time - self.first_obstacle_detection_time < confirmation_time:
+                    return
+
+                # Препятствие подтверждено
+                print("Obstacle CONFIRMED")
                 self.avoiding_obstacle = True
-                self.last_avoidance_sensor_check = time()
+                self.obstacle_confirmed = True
+                self.last_avoidance_sensor_check = current_time
+
+                # Сбрасываем таймер первого обнаружения
+                if hasattr(self, 'first_obstacle_detection_time'):
+                    delattr(self, 'first_obstacle_detection_time')
 
                 # Determine turn direction
                 if left_blocked and not right_blocked:
@@ -426,6 +450,12 @@ class SpotMicroController:
 
                 # Start turning without stopping
                 self.accept_command(self.avoidance_turn_direction)
+            else:
+                # Препятствие исчезло до подтверждения - ложное срабатывание
+                self.obstacle_detected = False
+                if hasattr(self, 'first_obstacle_detection_time'):
+                    print("False alarm - obstacle disappeared before confirmation")
+                    delattr(self, 'first_obstacle_detection_time')
 
     def handle_touch_event(self):
         """Handle touch sensor reaction: Stop -> Sit -> Give Paw (hold for 10 seconds)"""
