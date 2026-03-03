@@ -134,6 +134,7 @@ class SpotMicroController:
         self.current_movement_command = "stop"
         self.current_servo_angles = [0.0] * 12
         self.speed_smoothing = 0.3
+        self.neutral_pause_end_time = None
         # ÐÐ°ÑÐ°Ð¼ÐµÑÑÑ ÑÑÐ°Ð±Ð¸Ð»Ð¸Ð·Ð°ÑÐ¸Ð¸
         self.cg_stabilization_enabled = True
         self.imu_stabilization_enabled = True  # ÐÐ¾Ð±Ð°Ð²Ð»ÑÐµÐ¼ Ð¾ÑÐ´ÐµÐ»ÑÐ½ÑÐ¹ ÑÐ»Ð°Ð³ Ð´Ð»Ñ IMU

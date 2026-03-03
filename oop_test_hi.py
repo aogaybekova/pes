@@ -37,6 +37,9 @@ import Spotmicro_Gravity_Center_lib_007
 import Spotmicro_Animate_lib_009
 
 print("=== Script started ===")
+
+NEUTRAL_PAUSE_DURATION = 0.3  # seconds to pause after neutral before next direction command
+
 # ==================== CLASS CONTROLLER ====================
 
 class SpotMicroController:
@@ -795,6 +798,17 @@ class SpotMicroController:
                     if self.walking:
                         print(f"New movement command '{command}' while walking: resetting to neutral")
                         reset_to_neutral()
+                        self.neutral_pause_end_time = time() + NEUTRAL_PAUSE_DURATION
+                        self.command_queue.insert(0, command)
+                        break
+
+                    # If neutral pause is still active, re-queue and wait; once expired, proceed
+                    elif self.neutral_pause_end_time is not None:
+                        if time() < self.neutral_pause_end_time:
+                            print(f"Neutral pause active, re-queuing '{command}'")
+                            self.command_queue.insert(0, command)
+                            break
+                        self.neutral_pause_end_time = None
 
                     # If recovering, re-queue the command to process after recovery completes
                     elif self.recovering:
