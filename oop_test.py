@@ -117,7 +117,7 @@ class SpotMicroController:
         self.v_amp2, self.v_amp4 = 20, 45 #25 # ÐÐµÑÑÐ¸ÐºÐ°Ð»ÑÐ½Ð°Ñ Ð°Ð¼Ð¿Ð»Ð¸ÑÑÐ´Ð° Ð¿Ð¾Ð´ÑÐµÐ¼Ð° Ð½Ð¾Ð³ (Z-Ð½Ð°Ð¿ÑÐ°Ð²Ð»ÐµÐ½Ð¸Ðµ)
         #Ð´Ð»Ð¸Ð½a ÑÐ°Ð³Ð°
         self.stepl2, self.stepl4 = 0.16, 0.125 #was 0.2#08#0.125 # Ð¡ÐÐÐ ÐÐ¡Ð¢Ð¬ ÐÐÐ ÐÐÐÐ©ÐÐÐÐ¯ Ð¢ÐÐÐ
-        self.tstep2, self.tstep4 = self.stepl2 / 8, 0.015 #0.8 #0.012 #6666666666 # Ð²ÑÐµÐ¼Ñ ÑÐ°Ð³Ð°
+        self.tstep2, self.tstep4 = self.stepl2 / 8, 0.025 #0.8 #0.012 #6666666666 # Ð²ÑÐµÐ¼Ñ ÑÐ°Ð³Ð°
         self.track = self.track4
         self.h_amp = self.h_amp4
         self.v_amp = self.v_amp4
