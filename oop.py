@@ -104,7 +104,7 @@ class SpotMicroController:
         self.v_amp2, self.v_amp4 = 20, 45 #25 # Вертикальная амплитуда подъема ног (Z-направление)
         #длинa шага
         self.stepl2, self.stepl4 = 0.16, 0.125 #was 0.2#08#0.125 # СКОРОСТЬ ПЕРЕМЕЩЕНИЯ ТЕЛА
-        self.tstep2, self.tstep4 = self.stepl2 / 8, 0.015 #0.8 #0.012 #6666666666 # время шага
+        self.tstep2, self.tstep4 = self.stepl2 / 7, 0.02 #0.8 #0.012 #6666666666 # время шага (ускорено)
         self.track = self.track4
         self.h_amp = self.h_amp4
         self.v_amp = self.v_amp4
