@@ -127,14 +127,10 @@ class Spot:
     servo_table = [4,5,6,0,1,2,8,9,10,12,13,14]
 
     def interp(x1,x2,steps):
-        out = np.zeros(steps)
-        for i in range (steps):
-            out[i] = x1 +(x2-x1)/(steps-1)*i
-        return out
+        return np.linspace(x1, x2, steps)
      
     def interp1(x1,x2,i,steps):
-        out = x1 +(x2-x1)/(steps-1)*i
-        return out
+        return x1 +(x2-x1)/(steps-1)*i
     
     
     
