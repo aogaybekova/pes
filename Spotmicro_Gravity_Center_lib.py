@@ -3,8 +3,8 @@
 
 
 from math import sqrt
-import Spotmicro_lib_020
-Spot = Spotmicro_lib_020.Spot()
+import Spotmicro_lib
+Spot = Spotmicro_lib.Spot()
 
 
 class SpotCG:
