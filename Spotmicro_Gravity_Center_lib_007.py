@@ -9,7 +9,7 @@ Spot = Spotmicro_lib_020.Spot()
 
 class SpotCG:
     def CG_calculation (self,thetalf,thetarf,thetarr,thetalr):
-        leg_data = (
+        leg_cg_data = (
             (Spot.FK_Weight(thetalf, 1), (Spot.xlf, Spot.ylf, Spot.zlf)),
             (Spot.FK_Weight(thetarf, -1), (Spot.xrf, Spot.yrf, Spot.zrf)),
             (Spot.FK_Weight(thetarr, -1), (Spot.xrr, Spot.yrr, Spot.zrr)),
@@ -21,12 +21,12 @@ class SpotCG:
         weight_sum = Spot.Weight_Body + 4 * sum(weights)
 
         cg = []
-        for axis, indexes in enumerate(cg_indexes):
+        for axis, indices in enumerate(cg_indexes):
             axis_total = 0
-            for cgpos, offsets in leg_data:
+            for cgpos, offsets in leg_cg_data:
                 axis_total += sum(
                     (cgpos[idx] + offsets[axis]) * weight
-                    for idx, weight in zip(indexes, weights)
+                    for idx, weight in zip(indices, weights)
                 )
             cg.append((axis_total + body_cg[axis] * Spot.Weight_Body) / weight_sum)
 

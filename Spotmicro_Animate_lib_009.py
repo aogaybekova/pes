@@ -167,8 +167,8 @@ class SpotAnim:
 
         linesus = [
             line[4]
-            for line, in_stance in zip((linelf, linerf, linerr, linelr), stance)
-            if in_stance
+            for line, stance_value in zip((linelf, linerf, linerr, linelr), stance)
+            if stance_value
         ]
 
         """ Center of gravity into sustentation area """
