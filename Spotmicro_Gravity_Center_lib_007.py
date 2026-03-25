@@ -9,32 +9,28 @@ Spot = Spotmicro_lib_020.Spot()
 
 class SpotCG:
     def CG_calculation (self,thetalf,thetarf,thetarr,thetalr):
-        cgposlf=(Spot.FK_Weight(thetalf,1))
-        cgposrf=(Spot.FK_Weight(thetarf,-1))
-        cgposrr=(Spot.FK_Weight(thetarr,-1))
-        cgposlr=(Spot.FK_Weight(thetalr,1))
+        leg_cg_data = (
+            (Spot.FK_Weight(thetalf, 1), (Spot.xlf, Spot.ylf, Spot.zlf)),
+            (Spot.FK_Weight(thetarf, -1), (Spot.xrf, Spot.yrf, Spot.zrf)),
+            (Spot.FK_Weight(thetarr, -1), (Spot.xrr, Spot.yrr, Spot.zrr)),
+            (Spot.FK_Weight(thetalr, 1), (Spot.xlr, Spot.ylr, Spot.zlr)),
+        )
+        weights = (Spot.Weight_Shoulder, Spot.Weight_Leg, Spot.Weight_Foreleg)
+        cg_indexes = ((0, 1, 2), (3, 4, 5), (6, 7, 8))
+        body_cg = (Spot.xCG_Body, Spot.yCG_Body, Spot.zCG_Body)
+        weight_sum = Spot.Weight_Body + 4 * sum(weights)
 
-        Weightsum = Spot.Weight_Body+4*(Spot.Weight_Shoulder+Spot.Weight_Leg+Spot.Weight_Foreleg)
+        cg = []
+        for axis, indices in enumerate(cg_indexes):
+            axis_total = 0
+            for cgpos, offsets in leg_cg_data:
+                axis_total += sum(
+                    (cgpos[idx] + offsets[axis]) * weight
+                    for idx, weight in zip(indices, weights)
+                )
+            cg.append((axis_total + body_cg[axis] * Spot.Weight_Body) / weight_sum)
 
-        xcglf=(cgposlf[0]+Spot.xlf)*Spot.Weight_Shoulder+(cgposlf[1]+Spot.xlf)*Spot.Weight_Leg+(cgposlf[2]+Spot.xlf)*Spot.Weight_Foreleg
-        xcgrf=(cgposrf[0]+Spot.xrf)*Spot.Weight_Shoulder+(cgposrf[1]+Spot.xrf)*Spot.Weight_Leg+(cgposrf[2]+Spot.xrf)*Spot.Weight_Foreleg
-        xcgrr=(cgposrr[0]+Spot.xrr)*Spot.Weight_Shoulder+(cgposrr[1]+Spot.xrr)*Spot.Weight_Leg+(cgposrr[2]+Spot.xrr)*Spot.Weight_Foreleg
-        xcglr=(cgposlr[0]+Spot.xlr)*Spot.Weight_Shoulder+(cgposlr[1]+Spot.xlr)*Spot.Weight_Leg+(cgposlr[2]+Spot.xlr)*Spot.Weight_Foreleg
-        xcg= (xcglf+xcgrf+xcgrr+xcglr+Spot.xCG_Body*Spot.Weight_Body)/Weightsum
-
-        ycglf=(cgposlf[3]+Spot.ylf)*Spot.Weight_Shoulder+(cgposlf[4]+Spot.ylf)*Spot.Weight_Leg+(cgposlf[5]+Spot.ylf)*Spot.Weight_Foreleg
-        ycgrf=(cgposrf[3]+Spot.yrf)*Spot.Weight_Shoulder+(cgposrf[4]+Spot.yrf)*Spot.Weight_Leg+(cgposrf[5]+Spot.yrf)*Spot.Weight_Foreleg
-        ycgrr=(cgposrr[3]+Spot.yrr)*Spot.Weight_Shoulder+(cgposrr[4]+Spot.yrr)*Spot.Weight_Leg+(cgposrr[5]+Spot.yrr)*Spot.Weight_Foreleg
-        ycglr=(cgposlr[3]+Spot.ylr)*Spot.Weight_Shoulder+(cgposlr[4]+Spot.ylr)*Spot.Weight_Leg+(cgposlr[5]+Spot.ylr)*Spot.Weight_Foreleg
-        ycg= (ycglf+ycgrf+ycgrr+ycglr+Spot.yCG_Body*Spot.Weight_Body)/Weightsum
-
-        zcglf=(cgposlf[6]+Spot.zlf)*Spot.Weight_Shoulder+(cgposlf[7]+Spot.zlf)*Spot.Weight_Leg+(cgposlf[8]+Spot.zlf)*Spot.Weight_Foreleg
-        zcgrf=(cgposrf[6]+Spot.zrf)*Spot.Weight_Shoulder+(cgposrf[7]+Spot.zrf)*Spot.Weight_Leg+(cgposrf[8]+Spot.zrf)*Spot.Weight_Foreleg
-        zcgrr=(cgposrr[6]+Spot.zrr)*Spot.Weight_Shoulder+(cgposrr[7]+Spot.zrr)*Spot.Weight_Leg+(cgposrr[8]+Spot.zrr)*Spot.Weight_Foreleg
-        zcglr=(cgposlr[6]+Spot.zlr)*Spot.Weight_Shoulder+(cgposlr[7]+Spot.zlr)*Spot.Weight_Leg+(cgposlr[8]+Spot.zlr)*Spot.Weight_Foreleg
-        zcg= (zcglf+zcgrf+zcgrr+zcglr+Spot.zCG_Body*Spot.Weight_Body)/Weightsum
-
-        return (xcg,ycg,zcg)
+        return tuple(cg)
 
 
     def CG_distance (self,x_legs,y_legs,z_legs,xcg,ycg,stance):
@@ -77,34 +73,31 @@ class SpotCG:
         d = 0
         xint = xcg
         yint = ycg
-        if (stance[0]== False)|(stance[2]== False):
+        if (stance[0] == False) or (stance[2] == False):
             d = d2
             xint = xint2
             yint = yint2
 
 
-        if (stance[1]== False)|(stance[3]== False):
+        if (stance[1] == False) or (stance[3] == False):
             d = d1
             xint = xint1
             yint = yint1
 
         balance = True
 
-        if (stance[0] == False)&(d< 0):
+        if (stance[0] == False) and (d < 0):
             balance = False
 
-        if (stance[1] == False)&(d> 0):
+        if (stance[1] == False) and (d > 0):
             balance = False
 
-        if (stance[2] == False)&(d> 0):
+        if (stance[2] == False) and (d > 0):
             balance = False
 
-        if (stance[3] == False)&(d< 0):
+        if (stance[3] == False) and (d < 0):
             balance = False
 
-        if (balance == False):
-            d=-abs(d)
-        else:
-            d=abs(d)
+        d = abs(d) if balance else -abs(d)
 
         return (d,xint,yint,balance)

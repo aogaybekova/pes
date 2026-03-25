@@ -127,19 +127,15 @@ class Spot:
     servo_table = [4,5,6,0,1,2,8,9,10,12,13,14]
 
     def interp(x1,x2,steps):
-        out = np.zeros(steps)
-        for i in range (steps):
-            out[i] = x1 +(x2-x1)/(steps-1)*i
-        return out
+        return np.linspace(x1, x2, steps)
      
     def interp1(x1,x2,i,steps):
-        out = x1 +(x2-x1)/(steps-1)*i
-        return out
+        return x1 +(x2-x1)/(steps-1)*i
     
     
     
     def xyz_rotation_matrix (self,thetax,thetay,thetaz,inverse):
-        if (inverse == True):
+        if inverse:
             #Rx*Ry*Rz
             t2 = cos(thetay)
             t3 = sin(thetaz)
@@ -306,7 +302,7 @@ class Spot:
          mangle = h_amp/maxr 
          
          """ Rotation angle and translation calculation"""    
-         if (phase <=2)|(phase >= 5):   #stop or start       
+         if (phase <=2) or (phase >= 5):   #stop or start       
              dtheta = mangle/(1-stepl)*tstep/2*cw
          else:
              dtheta = mangle/(1-stepl)*tstep*cw
@@ -330,7 +326,7 @@ class Spot:
         
          for i in range (0,4):
             
-            if  (t1<(seq[i]+tr))&(t1>(seq[i]+stepl)):                
+            if  (t1<(seq[i]+tr)) and (t1>(seq[i]+stepl)):                
                 alphav[i] =anb + (pi-anb)/(tr-stepl)*(t1-seq[i]-stepl)
                 #print (t1,alphav[i])
             if (t1<=seq[i]):
@@ -349,7 +345,7 @@ class Spot:
                          alpha[i] = -seq[i]/(1-stepl)/2 + (t2-seq[i])/stepl/(1-stepl)*seq[i]  
                      if (phase >= 5): #stop                         
                          alpha[i] = -1/2 + seq[i]/(1-stepl)/2 + (t2-seq[i])/stepl*(1-seq[i]/(1-stepl)) 
-                     if (phase <=4)&(phase>=3):  #walk                                               
+                     if (phase <=4) and (phase>=3):  #walk                                               
                          alpha[i] = -1/2  + ((t2-seq[i])/stepl) 
                  else:         
                      stance[i] = True #Leg is on the ground (absolute position value unchanged)
@@ -452,7 +448,7 @@ class Spot:
          zint = np.zeros(4)
          
          for i in range (0,4):              
-            if (t1>seq[i])&(t1<(seq[i]+tr)):
+            if (t1>seq[i]) and (t1<(seq[i]+tr)):
                  #relative position calculation (used for inverse kinematics)
                  alphah = an[i]+mangle*alpha[i]*cw
                  xleg_target = xc + radii[i]*cos(alphah) -(comp[0]-CG[0])*kcomp -x_offset -x_frame[i]

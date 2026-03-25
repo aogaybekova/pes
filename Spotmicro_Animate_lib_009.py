@@ -54,9 +54,6 @@ class SpotAnim:
     def display_rotate(self,x_spot,y_spot,z_spot,theta_spot,thetax,thetaz,xl,yl,zl):
         """ rotation related to movement"""
         line = []
-        Ma = np.zeros(9)
-        Mb = np.zeros(9)
-        M1 = np.zeros(9)
         Ma = Spot.xyz_rotation_matrix(theta_spot[3],theta_spot[4],theta_spot[2]+theta_spot[5],False)
         Mb = Spot.xyz_rotation_matrix(theta_spot[0],theta_spot[1],0,False)
         M1 = Spot.xyz_rotation_matrix(thetax,0,thetaz,True)
@@ -168,15 +165,11 @@ class SpotAnim:
         """Sustentation area lines"""
         #stance = False when leg is lifted from the floor
 
-        linesus =[]
-        if (stance[0]==True):
-            linesus.append(linelf[4])
-        if (stance[1]==True):
-            linesus.append(linerf[4])
-        if (stance[2]==True):
-            linesus.append(linerr[4])
-        if (stance[3]==True):
-            linesus.append(linelr[4])
+        linesus = [
+            line[4]
+            for line, stance_value in zip((linelf, linerf, linerr, linelr), stance)
+            if stance_value
+        ]
 
         """ Center of gravity into sustentation area """
         linedCG = SpotAnim.display_rotate (self,-x_spot[0],-y_spot[0],-z_spot[0],[0,0,0,0,0,0],thetax,thetaz,[CGabs[0],dCG[0]],[CGabs[1],dCG[1]],[0,0])
@@ -190,13 +183,13 @@ class SpotAnim:
         pygame.draw.lines(screen,SpotAnim.CYAN,False,lineR,2)
         pygame.draw.lines(screen,SpotAnim.GREEN,False,lineD,2)
 
-        if (center_display == True):
+        if center_display:
             pygame.draw.circle(screen,SpotAnim.BLACK,lineR[0],5)
         pygame.draw.lines(screen,SpotAnim.BLACK,False, linedCG,1)
         pygame.draw.circle(screen,SpotAnim.DARK_CYAN,lineR[1],5)
 
         pygame.draw.lines(screen,SpotAnim.BLACK,False, lineCG,1)
-        if (dCG[2] == True):
+        if dCG[2]:
             pygame.draw.circle(screen,SpotAnim.GREEN,lineCG[0],3)
         else:
             pygame.draw.circle(screen,SpotAnim.RED,lineCG[0],3)
