@@ -6,10 +6,10 @@ from time import sleep, time
 from math import pi, sin, cos, atan, atan2, sqrt
 import numpy as np
 import pygame
-import Spotmicro_lib_020
-Spot = Spotmicro_lib_020.Spot()
-import Spotmicro_Gravity_Center_lib_007
-SpotCG = Spotmicro_Gravity_Center_lib_007.SpotCG()
+import Spotmicro_lib
+Spot = Spotmicro_lib.Spot()
+import Spotmicro_Gravity_Center_lib
+SpotCG = Spotmicro_Gravity_Center_lib.SpotCG()
 pygame.init()
 screen = pygame.display.set_mode((600, 600)) #seems necessary to have access to keyboard
 
@@ -54,9 +54,7 @@ class SpotAnim:
     def display_rotate(self,x_spot,y_spot,z_spot,theta_spot,thetax,thetaz,xl,yl,zl):
         """ rotation related to movement"""
         line = []
-        Ma = np.zeros(9)
-        Mb = np.zeros(9)
-        M1 = np.zeros(9)
+        Ma, Mb, M1 = np.zeros(9)
         Ma = Spot.xyz_rotation_matrix(theta_spot[3],theta_spot[4],theta_spot[2]+theta_spot[5],False)
         Mb = Spot.xyz_rotation_matrix(theta_spot[0],theta_spot[1],0,False)
         M1 = Spot.xyz_rotation_matrix(thetax,0,thetaz,True)
@@ -168,15 +166,11 @@ class SpotAnim:
         """Sustentation area lines"""
         #stance = False when leg is lifted from the floor
 
-        linesus =[]
-        if (stance[0]==True):
-            linesus.append(linelf[4])
-        if (stance[1]==True):
-            linesus.append(linerf[4])
-        if (stance[2]==True):
-            linesus.append(linerr[4])
-        if (stance[3]==True):
-            linesus.append(linelr[4])
+        linesus = [
+            line[4]
+            for line, stance_value in zip((linelf, linerf, linerr, linelr), stance)
+            if stance_value
+        ]
 
         """ Center of gravity into sustentation area """
         linedCG = SpotAnim.display_rotate (self,-x_spot[0],-y_spot[0],-z_spot[0],[0,0,0,0,0,0],thetax,thetaz,[CGabs[0],dCG[0]],[CGabs[1],dCG[1]],[0,0])
