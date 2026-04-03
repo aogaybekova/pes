@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SpotMicro Control Panel</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            padding: 40px;
+            max-width: 600px;
+            width: 100%;
+        }
+        
+        h1 {
+            text-align: center;
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 2em;
+        }
+        
+        .subtitle {
+            text-align: center;
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 1em;
+        }
+        
+        .control-section {
+            margin-bottom: 30px;
+        }
+        
+        .control-section h2 {
+            color: #555;
+            margin-bottom: 15px;
+            font-size: 1.3em;
+            border-bottom: 2px solid #667eea;
+            padding-bottom: 5px;
+        }
+        
+        .button-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        
+        .button-row {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 15px;
+            justify-content: center;
+        }
+        
+        button {
+            padding: 20px;
+            font-size: 16px;
+            font-weight: bold;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            color: white;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 12px rgba(0, 0, 0, 0.2);
+        }
+        
+        button:active {
+            transform: translateY(0);
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+        
+        .btn-forward { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+        .btn-backward { background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); }
+        .btn-left { background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); }
+        .btn-right { background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%); }
+        .btn-turn-left { background: linear-gradient(135deg, #fa709a 0%, #fee140 100%); }
+        .btn-turn-right { background: linear-gradient(135deg, #30cfd0 0%, #330867 100%); }
+        .btn-stop { background: linear-gradient(135deg, #ff6b6b 0%, #c92a2a 100%); }
+        .btn-sit { background: linear-gradient(135deg, #feca57 0%, #ff9ff3 100%); }
+        .btn-stand { background: linear-gradient(135deg, #48c6ef 0%, #6f86d6 100%); }
+        .btn-paw { background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%); }
+        .btn-photo { background: linear-gradient(135deg, #f77062 0%, #fe5196 100%); }
+        
+        .status {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 10px;
+            background: #f8f9fa;
+            text-align: center;
+            min-height: 50px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .status.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        
+        .status.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        
+        .direction-pad {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 10px;
+            max-width: 300px;
+            margin: 0 auto 20px;
+        }
+        
+        .direction-pad button {
+            padding: 30px 20px;
+        }
+        
+        .direction-pad .empty {
+            visibility: hidden;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🤖 SpotMicro</h1>
+        <p class="subtitle">Robot Dog Control Panel</p>
+        
+        <div class="control-section">
+            <h2>Movement Controls</h2>
+            <div class="direction-pad">
+                <div class="empty"></div>
+                <button class="btn-forward" onclick="sendCommand('forward')">⬆️<br>Forward</button>
+                <div class="empty"></div>
+                
+                <button class="btn-left" onclick="sendCommand('left')">⬅️<br>Left</button>
+                <button class="btn-stop" onclick="sendCommand('stop_walk')">⏹️<br>Stop</button>
+                <button class="btn-right" onclick="sendCommand('right')">➡️<br>Right</button>
+                
+                <div class="empty"></div>
+                <button class="btn-backward" onclick="sendCommand('backward')">⬇️<br>Back</button>
+                <div class="empty"></div>
+            </div>
+            
+            <div class="button-row">
+                <button class="btn-turn-left" onclick="sendCommand('turn_left')" style="flex: 1">↶ Turn Left</button>
+                <button class="btn-turn-right" onclick="sendCommand('turn_right')" style="flex: 1">↷ Turn Right</button>
+            </div>
+        </div>
+        
+        <div class="control-section">
+            <h2>Posture Controls</h2>
+            <div class="button-row">
+                <button class="btn-sit" onclick="sendCommand('sit')" style="flex: 1">🪑 Sit</button>
+                <button class="btn-stand" onclick="sendCommand('stand')" style="flex: 1">🧍 Stand</button>
+            </div>
+        </div>
+        
+        <div class="control-section">
+            <h2>Actions</h2>
+            <div class="button-row">
+                <button class="btn-paw" onclick="sendCommand('paw_right')" style="flex: 1">🐾 Give Paw</button>
+                <button class="btn-photo" onclick="sendCommand('photo')" style="flex: 1">📷 Take Photo</button>
+            </div>
+        </div>
+        
+        <div class="status" id="status">
+            Ready to control robot
+        </div>
+    </div>
+    
+    <script>
+        function sendCommand(command) {
+            const statusDiv = document.getElementById('status');
+            statusDiv.textContent = `Sending command: ${command}...`;
+            statusDiv.className = 'status';
+            
+            fetch(`/cmd/${command}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        statusDiv.textContent = data.message;
+                        statusDiv.className = 'status success';
+                    } else {
+                        statusDiv.textContent = data.message;
+                        statusDiv.className = 'status error';
+                    }
+                    
+                    // Clear status after 3 seconds
+                    setTimeout(() => {
+                        statusDiv.textContent = 'Ready to control robot';
+                        statusDiv.className = 'status';
+                    }, 3000);
+                })
+                .catch(error => {
+                    statusDiv.textContent = `Error: ${error.message}`;
+                    statusDiv.className = 'status error';
+                    
+                    setTimeout(() => {
+                        statusDiv.textContent = 'Ready to control robot';
+                        statusDiv.className = 'status';
+                    }, 3000);
+                });
+        }
+        
+        // Add keyboard controls
+        document.addEventListener('keydown', function(event) {
+            switch(event.key) {
+                case 'ArrowUp':
+                case 'w':
+                case 'W':
+                    sendCommand('forward');
+                    event.preventDefault();
+                    break;
+                case 'ArrowDown':
+                case 's':
+                case 'S':
+                    sendCommand('backward');
+                    event.preventDefault();
+                    break;
+                case 'ArrowLeft':
+                case 'a':
+                case 'A':
+                    sendCommand('left');
+                    event.preventDefault();
+                    break;
+                case 'ArrowRight':
+                case 'd':
+                case 'D':
+                    sendCommand('right');
+                    event.preventDefault();
+                    break;
+                case ' ':
+                    sendCommand('stop_walk');
+                    event.preventDefault();
+                    break;
+                case 'q':
+                case 'Q':
+                    sendCommand('turn_left');
+                    event.preventDefault();
+                    break;
+                case 'e':
+                case 'E':
+                    sendCommand('turn_right');
+                    event.preventDefault();
+                    break;
+            }
+        });
+    </script>
+</body>
+</html>
