@@ -5,7 +5,7 @@ import pyaudio
 import threading
 import time
 from vosk import Model, KaldiRecognizer
-from oop_test_to_neutral0 import SpotMicroController
+from oop_test_to_neutral2 import SpotMicroController
 #from oop_test import SpotMicroController
 
 # === Settings ===
@@ -30,6 +30,8 @@ VOICE_COMMANDS = {
     "стоп": "stop_walk",
     "сто": "stop_walk",
     "остановка":"stop_walk",
+    "астановка":"stop_walk",
+
     "установка":"stop_walk",
     "асанов":"stop_walk",
     "привет":"hi",
@@ -41,7 +43,7 @@ VOICE_COMMANDS = {
     "опусти лапы": "paw_down",
     "опусти лапу": "paw_down",
     "опустил лапу": "paw_down",
-
+	"бочком": "trot",
     "опустил лапы": "paw_down",
     "опустела": "paw_down",
     "опустила": "paw_down",
@@ -54,7 +56,7 @@ VOICE_COMMANDS = {
     "собачи дела": "pee",
     "встряхнуться": "twist",
     "встряхнись": "twist",
-    "хороший мальчик": "twist",
+    "хороший мальчик": "twist_3",
     "хвост": "twist",
     "сесть": "sit",
     "сидеть": "sit",
@@ -67,10 +69,18 @@ VOICE_COMMANDS = {
     "поворот лево": "turn_left",
     "поворот вправо": "turn_right",
     "поворот право": "turn_right",
+    "боком направо": "right",
+    "боком налево": "left",
+    "боком вправо": "right",
+    "боком влево": "left",
     "анимация": "anim",
     "движение": "move",
     "трот": "trot",
     "иму": "imu",
+    "датчик": "imu",
+    "включить стабилизацию" : "stab_on",
+    "включи стабилизацию" : "stab_on",
+    "выключить стабилизацию" : "stab_off",
     "выход": "quit",
 }
 
@@ -91,7 +101,8 @@ def voice_thread(controller):
         p = pyaudio.PyAudio()
         
         print("Opening audio stream...")
-        stream = p.open(format=FORMAT, channels=CHANNELS, rate=SAMPLE_RATE, input=True, frames_per_buffer=CHUNK_SIZE)
+        stream = p.open(format=FORMAT, channels=CHANNELS, input_device_index=7, 
+        rate=SAMPLE_RATE, input=True, frames_per_buffer=CHUNK_SIZE)
         print("Audio stream opened")
 
         print("\n Голосовой контроль активен. Говорите команды...")
