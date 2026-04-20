@@ -4,6 +4,8 @@ import json
 import pyaudio
 import threading
 import time
+import numpy as np
+from scipy.signal import butter, sosfilt
 from vosk import Model, KaldiRecognizer
 from oop_test_to_neutral2 import SpotMicroController
 #from oop_test import SpotMicroController
@@ -14,6 +16,16 @@ SAMPLE_RATE = 16000
 CHUNK_SIZE = 4096
 FORMAT = pyaudio.paInt16
 CHANNELS = 1
+
+# Bandpass filter: keep human speech frequencies (80–3400 Hz),
+# removing low-frequency servo motor vibrations and high-frequency PWM noise.
+_BANDPASS_SOS = butter(5, [80, 3400], btype='bandpass', fs=SAMPLE_RATE, output='sos')
+
+def clean_audio(raw_bytes):
+    """Apply bandpass filter to raw PCM int16 audio bytes."""
+    samples = np.frombuffer(raw_bytes, dtype=np.int16).astype(np.float32)
+    filtered = sosfilt(_BANDPASS_SOS, samples)
+    return np.clip(filtered, -32768, 32767).astype(np.int16).tobytes()
 
 # Маппинг распознанных фраз в команды Spot
 VOICE_COMMANDS = {
@@ -110,6 +122,7 @@ def voice_thread(controller):
         while getattr(controller, 'continuer', True):
             try:
                 data = stream.read(CHUNK_SIZE, exception_on_overflow=False)
+                data = clean_audio(data)
                 if recognizer.AcceptWaveform(data):
                     result = json.loads(recognizer.Result())
                     text = result.get('text', '').strip().lower()
