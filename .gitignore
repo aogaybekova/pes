@@ -1,0 +1,60 @@
+# Игнорируемые файлы и директории
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# RL data (keep structure, ignore data files)
+rl_data/*.json
+rl_data/*.jsonl
+
+# Photos (keep structure, ignore actual photos)
+photos/*.jpg
+photos/*.jpeg
+photos/*.png
+
+# Keep .gitkeep files
+!.gitkeep
+
+# Temporary files
+/tmp/
+*.tmp
+*.temp
