@@ -8,6 +8,8 @@ import numpy as np
 import copy
 from math import pi, sin, cos, atan, sqrt
 from time import sleep, time
+import csv
+import socket
 
 # External dependencies
 import pygame
@@ -17,6 +19,22 @@ import adafruit_pca9685
 import adafruit_mpu6050
 #import mpu6050 #import mpu6050
 from adafruit_servokit import ServoKit
+
+# Gracefully handle imports that may not be available on dev machine
+try:
+    import RPi.GPIO as GPIO
+    GPIO_AVAILABLE = True
+except ImportError:
+    GPIO_AVAILABLE = False
+    print("Warning: RPi.GPIO not available. GPIO features will be disabled.")
+
+try:
+    import cv2
+    from picamera2 import Picamera2
+    CAMERA_AVAILABLE = True
+except ImportError:
+    CAMERA_AVAILABLE = False
+    print("Warning: cv2/picamera2 not available. Camera features will be disabled.")
 
 # SpotMicro-specific imports
 import Spotmicro_lib_020
@@ -169,6 +187,70 @@ class SpotMicroController:
         self.Angle = np.zeros(2)
         self.Angle_old = np.zeros(2)
         self.Integral_Angle = [0, 0]
+
+        # == GPIO Setup for Ultrasonic and Touch Sensors ==
+        self.left_ultrasonic_distance = 999.0  # Large value means no obstacle
+        self.right_ultrasonic_distance = 999.0
+        self.touch_sensor_state = 0  # 0 = not pressed, 1 = pressed
+        self.prev_touch_state = 0  # For edge detection
+        
+        if GPIO_AVAILABLE:
+            GPIO.setmode(GPIO.BCM)
+            # Ultrasonic sensors
+            self.LEFT_TRIG = 14
+            self.LEFT_ECHO = 15
+            self.RIGHT_TRIG = 23
+            self.RIGHT_ECHO = 24
+            # Touch sensor
+            self.TOUCH_PIN = 17
+            
+            # Setup GPIO pins
+            GPIO.setup(self.LEFT_TRIG, GPIO.OUT)
+            GPIO.setup(self.LEFT_ECHO, GPIO.IN)
+            GPIO.setup(self.RIGHT_TRIG, GPIO.OUT)
+            GPIO.setup(self.RIGHT_ECHO, GPIO.IN)
+            GPIO.setup(self.TOUCH_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+            
+            # Initialize trigger pins to LOW
+            GPIO.output(self.LEFT_TRIG, False)
+            GPIO.output(self.RIGHT_TRIG, False)
+            print("=== GPIO initialized for sensors ===")
+        
+        # == CSV Logger Setup ==
+        self.csv_filename = "rl_environment_log.csv"
+        self.csv_file = None
+        self.csv_writer = None
+        try:
+            self.csv_file = open(self.csv_filename, 'a', newline='')
+            self.csv_writer = csv.writer(self.csv_file)
+            # Write header if file is empty
+            if os.path.getsize(self.csv_filename) == 0:
+                self.csv_writer.writerow([
+                    'timestamp', 'left_distance', 'right_distance', 
+                    'touch_state', 'imu_roll', 'imu_pitch', 'current_command'
+                ])
+            print(f"=== CSV logger initialized: {self.csv_filename} ===")
+        except Exception as e:
+            print(f"Warning: Could not initialize CSV logger: {e}")
+        
+        # == Socket Server Setup ==
+        self.socket_server = None
+        self.socket_port = 5055
+        try:
+            self.socket_server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.socket_server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self.socket_server.bind(('localhost', self.socket_port))
+            self.socket_server.listen(1)
+            self.socket_server.setblocking(False)  # Non-blocking
+            print(f"=== Socket server initialized on localhost:{self.socket_port} ===")
+        except Exception as e:
+            print(f"Warning: Could not initialize socket server: {e}")
+            self.socket_server = None
+        
+        self.client_socket = None
+        
+        # == Obstacle avoidance state ==
+        self.avoiding_obstacle = False
 
         # == Positions (body, legs)
         self.pos_init = [-self.x_offset, self.track4, -self.b_height, -self.x_offset, -self.track4, -self.b_height,
@@ -486,10 +568,174 @@ class SpotMicroController:
                     print(f"IMU compensation: {state}")
                     self.current_action = f"IMU compensation {state}"
 
+                elif command == "photo":
+                    self.capture_photo()
+                    self.current_action = "Photo captured"
+
                 else:
                     print(f"Unknown command: {command}")
                     print(
                         "Available commands: walk, sit, lie, twist, pee, stop, forward, backward, left, right, turn_left, turn_right, paw_left, paw_right, paw_down, move, anim, trot, imu, quit")
+
+
+    # ==================== SENSOR AND COMMUNICATION METHODS ====================
+
+    def update_sensors(self):
+        """Read ultrasonic distances and touch sensor state with filtering."""
+        if not GPIO_AVAILABLE:
+            return
+        
+        try:
+            # Read left ultrasonic sensor
+            GPIO.output(self.LEFT_TRIG, True)
+            sleep(0.00001)
+            GPIO.output(self.LEFT_TRIG, False)
+            
+            pulse_start_time = time()
+            timeout = pulse_start_time + 0.1  # 100ms timeout
+            while GPIO.input(self.LEFT_ECHO) == 0 and time() < timeout:
+                pulse_start = time()
+            
+            pulse_end = time()
+            timeout = pulse_start_time + 0.2  # Extended timeout for pulse end
+            while GPIO.input(self.LEFT_ECHO) == 1 and time() < timeout:
+                pulse_end = time()
+            
+            pulse_duration = pulse_end - pulse_start
+            left_distance = pulse_duration * 17150  # Speed of sound: 34300 cm/s / 2
+            left_distance = round(left_distance, 2)
+            
+            # Filter: only update if reasonable value
+            if 2 < left_distance < 400:
+                self.left_ultrasonic_distance = left_distance
+            
+            sleep(0.01)  # Small delay between sensors
+            
+            # Read right ultrasonic sensor
+            GPIO.output(self.RIGHT_TRIG, True)
+            sleep(0.00001)
+            GPIO.output(self.RIGHT_TRIG, False)
+            
+            pulse_start_time = time()
+            timeout = pulse_start_time + 0.1
+            while GPIO.input(self.RIGHT_ECHO) == 0 and time() < timeout:
+                pulse_start = time()
+            
+            pulse_end = time()
+            timeout = pulse_start_time + 0.2
+            while GPIO.input(self.RIGHT_ECHO) == 1 and time() < timeout:
+                pulse_end = time()
+            
+            pulse_duration = pulse_end - pulse_start
+            right_distance = pulse_duration * 17150
+            right_distance = round(right_distance, 2)
+            
+            # Filter: only update if reasonable value
+            if 2 < right_distance < 400:
+                self.right_ultrasonic_distance = right_distance
+            
+            # Read touch sensor (active LOW with pull-up)
+            self.prev_touch_state = self.touch_sensor_state
+            self.touch_sensor_state = 0 if GPIO.input(self.TOUCH_PIN) else 1
+            
+        except Exception as e:
+            print(f"Sensor read error: {e}")
+
+    def log_environment(self):
+        """Append current state to CSV file."""
+        if self.csv_writer is None:
+            return
+        
+        try:
+            # Get IMU data if available
+            imu_roll = self.Angle[0] if hasattr(self, 'Angle') else 0.0
+            imu_pitch = self.Angle[1] if hasattr(self, 'Angle') else 0.0
+            
+            # Write row
+            self.csv_writer.writerow([
+                time(),
+                self.left_ultrasonic_distance,
+                self.right_ultrasonic_distance,
+                self.touch_sensor_state,
+                imu_roll,
+                imu_pitch,
+                self.current_movement_command
+            ])
+            self.csv_file.flush()  # Ensure data is written
+        except Exception as e:
+            print(f"CSV logging error: {e}")
+
+    def check_app_commands(self):
+        """Accept connections and read commands from socket server."""
+        if self.socket_server is None:
+            return
+        
+        try:
+            # Try to accept new connection if we don't have one
+            if self.client_socket is None:
+                try:
+                    self.client_socket, addr = self.socket_server.accept()
+                    self.client_socket.setblocking(False)
+                    print(f"=== App connected from {addr} ===")
+                except BlockingIOError:
+                    pass  # No connection waiting
+            
+            # Try to read command from existing connection
+            if self.client_socket is not None:
+                try:
+                    data = self.client_socket.recv(1024)
+                    if data:
+                        command = data.decode('utf-8').strip()
+                        print(f"Received command from app: {command}")
+                        with self.console_lock:
+                            self.command_queue.append(command)
+                    else:
+                        # Connection closed
+                        self.client_socket.close()
+                        self.client_socket = None
+                except BlockingIOError:
+                    pass  # No data waiting
+                except Exception as e:
+                    print(f"Socket read error: {e}")
+                    if self.client_socket:
+                        self.client_socket.close()
+                        self.client_socket = None
+        except Exception as e:
+            print(f"Socket communication error: {e}")
+
+    def capture_photo(self):
+        """Use picamera2 and cv2 to take a photo."""
+        if not CAMERA_AVAILABLE:
+            print("Camera not available")
+            return
+        
+        try:
+            picam2 = Picamera2()
+            camera_config = picam2.create_still_configuration()
+            picam2.configure(camera_config)
+            picam2.start()
+            
+            sleep(2)  # Let camera adjust
+            
+            # Capture frame
+            frame = picam2.capture_array()
+            
+            # Convert from RGB to BGR for OpenCV
+            frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+            
+            # Generate filename with timestamp
+            timestamp = int(time())
+            filename = f"capture_{timestamp}.jpg"
+            
+            # Save image
+            cv2.imwrite(filename, frame_bgr)
+            print(f"Photo saved as {filename}")
+            
+            picam2.stop()
+            picam2.close()
+            
+        except Exception as e:
+            print(f"Camera error: {e}")
 
 
     # ==================== MAIN ROBOTIC CYCLE ====================
@@ -525,6 +771,33 @@ class SpotMicroController:
             self.screen.blit(move_text, (10, 70))
 
             self.process_console_commands()
+
+            # ---- Update sensors, log environment, and check for app commands ----
+            if self.frame_counter % 10 == 0:  # Update every 10 frames to avoid too frequent calls
+                self.update_sensors()
+                self.log_environment()
+            
+            self.check_app_commands()
+            
+            # ---- Touch Sensor Logic ----
+            if self.touch_sensor_state == 1 and self.prev_touch_state == 0:  # Transition from 0 to 1
+                print("=== TOUCH DETECTED ===")
+                if self.walking:
+                    # Force stop_walk
+                    print("Touch: Forcing stop_walk")
+                    with self.console_lock:
+                        self.command_queue.insert(0, "stop_walk")
+                elif self.sitting and not self.lock:
+                    # Force paw_right (give paw)
+                    print("Touch: Giving paw")
+                    with self.console_lock:
+                        self.command_queue.insert(0, "paw_right")
+                elif self.Free and not self.sitting and not self.walking:
+                    # Standing: Force sit, then queue paw_right
+                    print("Touch: Sitting and then giving paw")
+                    with self.console_lock:
+                        self.command_queue.insert(0, "sit")
+                        self.command_queue.insert(1, "paw_right")
 
             #плавное изменение скорости
             if self.walking and hasattr(self, 'target_speed'):
@@ -564,6 +837,31 @@ class SpotMicroController:
                 self.DIR_BACKWARD = 3 * pi / 2
                 self.DIR_LEFT = pi
                 self.DIR_RIGHT = 0
+
+                # ---- Obstacle Avoidance Logic ----
+                obstacle_threshold = 30  # cm
+                if self.current_movement_command == "forward":
+                    # Check if any sensor detects obstacle
+                    left_obstacle = self.left_ultrasonic_distance < obstacle_threshold
+                    right_obstacle = self.right_ultrasonic_distance < obstacle_threshold
+                    
+                    if left_obstacle or right_obstacle:
+                        # Compare distances to find side with more space
+                        if self.left_ultrasonic_distance > self.right_ultrasonic_distance:
+                            # More space on left, turn left
+                            print(f"Obstacle ahead! Turning left (L:{self.left_ultrasonic_distance}cm, R:{self.right_ultrasonic_distance}cm)")
+                            self.current_movement_command = "turn_left"
+                            self.avoiding_obstacle = True
+                        else:
+                            # More space on right, turn right
+                            print(f"Obstacle ahead! Turning right (L:{self.left_ultrasonic_distance}cm, R:{self.right_ultrasonic_distance}cm)")
+                            self.current_movement_command = "turn_right"
+                            self.avoiding_obstacle = True
+                    elif self.avoiding_obstacle:
+                        # Path is clear again, resume forward
+                        print("Path clear, resuming forward")
+                        self.avoiding_obstacle = False
+                        self.current_movement_command = "forward"
 
                 if self.current_movement_command == "forward":
                     #self.walking_speed = 100  # 0.5
