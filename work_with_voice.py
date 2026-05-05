@@ -5,7 +5,7 @@ import pyaudio
 import threading
 import time
 from vosk import Model, KaldiRecognizer
-from oop_test_to_neutral2 import SpotMicroController
+from oop_final import SpotMicroController
 #from oop_test import SpotMicroController
 
 # === Settings ===
