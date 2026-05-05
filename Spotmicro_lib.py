@@ -41,27 +41,27 @@ class Spot:
     # FL_clav: 95 - 8 = 87
     zero01 = 94
     # FL_hum: 97 - 15 = 82
-    zero02 = 74
+    zero02 = 92
     # FL_rad: (75 + 3)
-    zero03 = 78 + 90* angle_scale_factor_lf3 #was 69
+    zero03 = 84 + 90* angle_scale_factor_lf3 #was 69
     # FR_clav: 91 + 2 = 93
     zero04 = 105
     # FR_hum: 90 + 0 = 90
-    zero05 = 110
+    zero05 = 118
     # FR_rad: 89 
-    zero06 = 98 - 90* angle_scale_factor_rf3 #was 95
+    zero06 = 115 - 90* angle_scale_factor_rf3 #was 95 #125
     # BR_clav: 92 + 0 = 92
-    zero07 = 95
+    zero07 = 92
     # BR_hum: 81 + 0 = 81
-    zero08 = 90
+    zero08 = 102
     # BR_rad: 102
-    zero09 = 75- 90* angle_scale_factor_rr3 # was 108
+    zero09 = 108- 90* angle_scale_factor_rr3 # was 108 121
     # BL_clav: 96
     zero10 = 104
     # BL_hum: 94
-    zero11 = 54
+    zero11 = 82
     # BL_rad: 73
-    zero12 = 62 + 90* angle_scale_factor_lr3 #was 67
+    zero12 = 77 + 90* angle_scale_factor_lr3 #was 67
        
 
     """" Spotmicro dimensions """
@@ -127,10 +127,14 @@ class Spot:
     servo_table = [4,5,6,0,1,2,8,9,10,12,13,14]
 
     def interp(x1,x2,steps):
-        return np.linspace(x1, x2, steps)
+        out = np.zeros(steps)
+        for i in range (steps):
+            out[i] = x1 +(x2-x1)/(steps-1)*i
+        return out
      
     def interp1(x1,x2,i,steps):
-        return x1 +(x2-x1)/(steps-1)*i
+        out = x1 +(x2-x1)/(steps-1)*i
+        return out
     
     
     
