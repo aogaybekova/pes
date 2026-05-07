@@ -74,6 +74,8 @@ class SpotMicroController:
         # == Command/state management
         self.command_queue = []
         self.console_lock = threading.Lock()
+        self.current_command_in_progress = None  # Track currently executing command
+        self.command_queue_set = set()  # Prevent duplicate commands in queue
 
         # == Main state
         self.anim_flag = False
@@ -94,6 +96,11 @@ class SpotMicroController:
         self.lockmouse = False
         self.mouseclick = False
         self.IMU_Comp = False
+        
+        # Animation state tracking
+        self.in_turn_animation = False  # Flag to track if currently executing turn
+        self.turn_start_time = 0  # Track when turn started
+        self.TURN_ANIMATION_DURATION = 1.0  # Time units for a complete turn cycle
 
 
         # == Walking params
@@ -189,8 +196,29 @@ class SpotMicroController:
     # ==================== PRIMARY INTERFACE ====================
 
     def accept_command(self, command):
+        """Accept a command with duplicate prevention"""
         with self.console_lock:
-            self.command_queue.append(command)
+            # Prevent duplicate commands in queue
+            if command not in self.command_queue_set:
+                self.command_queue.append(command)
+                self.command_queue_set.add(command)
+                print(f"[QUEUE] Command added: {command} (queue size: {len(self.command_queue)})")
+    
+    def _requeue_command_if_not_exists(self, cmd, reason):
+        """Helper to re-queue a command if it's not already in the queue"""
+        if cmd not in self.command_queue_set:
+            self.command_queue.append(cmd)
+            self.command_queue_set.add(cmd)
+            print(f"[QUEUE] Re-queuing '{cmd}': {reason}")
+    
+    def _check_turn_completion(self):
+        """Check if turn animation has completed and update state"""
+        if self.in_turn_animation and (self.t - self.turn_start_time) >= self.TURN_ANIMATION_DURATION:
+            self.in_turn_animation = False
+            turn_direction = "LEFT" if self.cw == 1 else "RIGHT"
+            print(f"[TURN] === TURN {turn_direction} COMPLETED ===")
+            return True
+        return False
 
     def start_console_thread(self):
         print('=== Console thread started ===')
@@ -239,60 +267,95 @@ class SpotMicroController:
                 self.lock = True
                 self.walking_speed = 0
                 self.current_action = "Walking mode started"
-                print("=== WALKING STARTED ===")
+                print("[STATE] === WALKING STARTED ===")
 
         with self.console_lock:
             while self.command_queue:
                 command = self.command_queue.pop(0)
-                print(f"Executing: {command}")
+                # Remove from set to allow re-queuing after execution
+                self.command_queue_set.discard(command)
+                
+                print(f"[EXEC] Executing: {command}")
+                self.current_command_in_progress = command
 
                 if command == "quit":
                     self.continuer = False
                     self.current_action = "Shutting down"
 
                 elif command == "forward":
+                    # Transition from turn to forward - complete turn animation first
+                    if self.in_turn_animation:
+                        print("[TRANSITION] Completing turn before moving forward...")
+                        self.in_turn_animation = False
                     ensure_walking_mode()
                     self.current_movement_command = "forward"
                     self.target_speed = 100
                     self.current_action = "Moving forward"
+                    print("[MOVEMENT] Moving forward")
 
                 elif command == "backward":
+                    if self.in_turn_animation:
+                        print("[TRANSITION] Completing turn before moving backward...")
+                        self.in_turn_animation = False
                     ensure_walking_mode()
                     self.current_movement_command = "backward"
                     self.target_speed = 100
                     self.current_action = "Moving backward"
+                    print("[MOVEMENT] Moving backward")
 
                 elif command == "left":
+                    if self.in_turn_animation:
+                        print("[TRANSITION] Completing turn before strafing left...")
+                        self.in_turn_animation = False
                     ensure_walking_mode()
                     self.current_movement_command = "left"
                     self.current_action = "Moving left"
+                    print("[MOVEMENT] Moving left")
 
                 elif command == "right":
+                    if self.in_turn_animation:
+                        print("[TRANSITION] Completing turn before strafing right...")
+                        self.in_turn_animation = False
                     ensure_walking_mode()
                     self.current_movement_command = "right"
                     self.current_action = "Moving right"
+                    print("[MOVEMENT] Moving right")
 
                 elif command == "turn_left":
                     ensure_walking_mode()
                     self.current_movement_command = "turn_left"
                     self.current_action = "Turning left"
+                    self.in_turn_animation = True
+                    self.turn_start_time = self.t
+                    print("[TURN] === TURN LEFT STARTED ===")
 
                 elif command == "turn_right":
                     ensure_walking_mode()
                     self.current_movement_command = "turn_right"
                     self.current_action = "Turning right"
+                    self.in_turn_animation = True
+                    self.turn_start_time = self.t
+                    print("[TURN] === TURN RIGHT STARTED ===")
 
                 elif command == "stop_walk":
                     if self.walking:
+                        # Check if we're in the middle of a turn animation
+                        if self.in_turn_animation:
+                            print("[STOP_WALK] Waiting for turn to complete before stopping...")
+                            # Re-queue the stop_walk command to execute after turn completes
+                            self._requeue_command_if_not_exists("stop_walk", "Turn animation in progress")
+                            continue
+                        
                         self.stop = True
                         self.lock = True
                         self.tstop = int(self.t)
                         self.current_movement_command = "stop"
                         self.current_action = "Stopping walk..."
-                        print("=== STOPPING WALK SEQUENCE INITIATED ===")
-                        self.current_action = "Movement stopped, remaining in Walk mode"
+                        self.in_turn_animation = False
+                        print("[STOP_WALK] === STOPPING WALK SEQUENCE INITIATED ===")
+                        print(f"[STOP_WALK] Stop triggered at t={self.t}, tstop={self.tstop}")
                     else:
-                        print("Not in walking mode.")
+                        print("[STOP_WALK] Not in walking mode.")
 
                 elif command == "walk":
                     if self.walking and not self.stop and not self.lock:
@@ -354,6 +417,13 @@ class SpotMicroController:
                     print("*** EMERGENCY STOP ***")
 
                 elif command == "sit":
+                    # Check if animation is in progress
+                    if self.walking and not self.Free:
+                        print("[SIT] Waiting for walking animation to complete before transition")
+                        # Re-queue sit command to execute after walking completes
+                        self._requeue_command_if_not_exists("sit", "Walking animation in progress")
+                        continue
+                    
                     if not self.sitting and self.Free:
                         self.sitting = True
                         self.stop = False
@@ -364,13 +434,13 @@ class SpotMicroController:
                         self.joypal = -1
                         self.joypar = -1
                         self.current_action = "Sitting down"
-                        print("=== SITTING DOWN ===")
+                        print("[STATE] === SITTING DOWN ===")
                     elif self.sitting and not self.stop and not self.lock:
                         self.stop = True
                         self.lock = True
                         self.pawing = False
                         self.current_action = "Standing up"
-                        print("=== STANDING UP ===")
+                        print("[STATE] === STANDING UP FROM SIT ===")
 
                 elif command == "stand":
                     if (self.sitting or self.lying) and not self.stop and not self.lock:
@@ -378,9 +448,9 @@ class SpotMicroController:
                         self.lock = True
                         self.pawing = False
                         self.current_action = "Standing up"
-                        print("=== STANDING UP ===")
+                        print("[STATE] === STANDING UP ===")
                     elif self.Free:
-                        print("Already standing.")
+                        print("[STATE] Already standing.")
 
 
                 elif command == "lie":
@@ -594,12 +664,18 @@ class SpotMicroController:
                     self.walking_direction = 0
                     self.steering = 80  # 1000
                     self.cw = 1
+                    
+                    # Check if turn animation has completed a full cycle
+                    self._check_turn_completion()
 
                 elif self.current_movement_command == "turn_right":
                     self.walking_speed = 100
                     self.walking_direction = 0
                     self.steering = 80  # 1000
                     self.cw = -1
+                    
+                    # Check if turn animation has completed a full cycle
+                    self._check_turn_completion()
 
                 elif self.current_movement_command == "stop":
                     self.walking_speed = 0.0
@@ -687,7 +763,9 @@ class SpotMicroController:
                     self.lock = False
                     self.stop = False
                     self.walking = False
-                    print("===> Switching to recovering!")
+                    self.in_turn_animation = False  # Clear turn flag
+                    print("[STATE] ===> Switching to recovering!")
+                    print(f"[STATE] Walking stopped at t={self.t}")
                     self.recovering = True  # Activate recovery state
                     self.t = 0
 
@@ -695,7 +773,7 @@ class SpotMicroController:
                     self.temp_start_pos = [self.pos[12][0], self.pos[12][1], self.pos[12][2], self.pos[13][1], self.pos[14][1], self.pos[15][1]]
 
                     self.current_action = "Realigning to Stand..."
-                    print("=== WALKING DONE -> REALIGNING TO STAND ===")
+                    print("[STATE] === WALKING DONE -> REALIGNING TO STAND ===")
 
             elif self.sitting:
                 # Sitting/Standing logic
@@ -730,7 +808,8 @@ class SpotMicroController:
                         self.joypal = -1
                         self.joypar = -1
                         self.current_action = "Standing completed"
-                        print("=== STANDING COMPLETED ===")
+                        print("[STATE] === STANDING COMPLETED ===")
+                        print("[STATE] Robot is now Free and ready for new commands")
                 else:
                     if self.t < 1:
                         # Sitting down - go from standing to sitting position
@@ -884,7 +963,9 @@ class SpotMicroController:
                         self.current_action = "Shifting completed"
                         print("=== SHIFTING COMPLETED ===")
             elif self.recovering:
-                # print(f"Recover t={t}, stance={stance}, transtep={transtep}")
+                # Recovery state: smoothly transition from walking pose back to standing
+                print(f"[RECOVERY] Recovering... t={self.t:.2f}")
+                
                 # (Stand/Initial position)
                 self.transtep = 0.8 #0.5  #
                 self.t = self.t + self.transtep  # transtep = 0.025,
@@ -902,8 +983,10 @@ class SpotMicroController:
                     self.Free = True
                     self.lock = False
                     self.walking = False
+                    self.in_turn_animation = False  # Ensure turn flag is cleared
                     self.current_action = "Stand recovery complete"
-                    print("=== STAND RECOVERY COMPLETED ===")
+                    print("[RECOVERY] === STAND RECOVERY COMPLETED ===")
+                    print("[STATE] Robot is now Free and ready for new commands")
 
                     self.pos_init = [-self.x_offset, self.track, -self.b_height, -self.x_offset, -self.track, -self.b_height, -self.x_offset, -self.track, -self.b_height,
                                 -self.x_offset, self.track, -self.b_height]
