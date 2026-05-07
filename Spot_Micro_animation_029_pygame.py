@@ -794,9 +794,10 @@ while (continuer):
 
         if (shifting == True):
             x_end_shifting = ra_longi
-            y_end_shifting = -ra_lat
+            y_end_shifting = -50  # Increased lateral shift for better balance
+            pee_roll_lean = 12.0/180*pi  # Body roll lean toward support side
             start_frame_pos = [0,0,0,x_offset,0,b_height] # x,y,z rotations then translations
-            end_frame_pos = [0,0,0, x_end_shifting+x_offset,y_end_shifting,b_height] # x,y,z rotations then translations
+            end_frame_pos = [pee_roll_lean,0,0, x_end_shifting+x_offset,y_end_shifting,b_height] # x,y,z rotations then translations
             pos = Spot.moving (t, start_frame_pos,end_frame_pos, pos)
 
             if (t==1)&(peeing == False):

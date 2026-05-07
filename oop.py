@@ -170,6 +170,10 @@ class SpotMicroController:
         self.Angle_old = np.zeros(2)
         self.Integral_Angle = [0, 0]
 
+        # for shift and pee
+        self.ra_longi = 30
+        self.ra_lat = 30
+
         # == Positions (body, legs)
         self.pos_init = [-self.x_offset, self.track4, -self.b_height, -self.x_offset, -self.track4, -self.b_height,
                          -self.x_offset, -self.track4, -self.b_height, -self.x_offset, self.track4, -self.b_height]
@@ -859,13 +863,30 @@ class SpotMicroController:
                     self.pos = self.Spot.moving((self.t - 0.75) * 4, end_frame_pos, start_frame_pos, self.pos)
 
             elif self.shifting:
-                # Shifting/Peeing logic
-                self.x_end_shifting = self.ra_longi
-                self.y_end_shifting = -self.ra_lat
-                start_frame_pos = [0, 0, 0, self.x_offset, 0, self.b_height]
-                end_frame_pos = [0, 0, 0, self.x_end_shifting + self.x_offset, self.y_end_shifting, self.b_height]
+                # Shifting/Peeing logic - two-phase animation:
+                # Phase 1 (t: 0..0.5): stable pose - shift body laterally with lean
+                # Phase 2 (t: 0.5..1.0): raise and abduct left rear leg after stabilization
+                pee_lat_shift = 50             # Lateral body shift for balance (mm)
+                pee_roll_lean = 12.0 / 180 * pi  # Body roll lean toward support side (rad)
+                pee_leg_lift = 100             # Foot lift height (mm)
+                pee_leg_abduct = 70            # Lateral foot abduction (mm)
 
-                self.pos = self.Spot.moving(self.t, start_frame_pos, end_frame_pos, self.pos)
+                start_frame_pos = [0, 0, 0, self.x_offset, 0, self.b_height]
+                end_frame_pos = [pee_roll_lean, 0, 0,
+                                 self.ra_longi + self.x_offset, -pee_lat_shift, self.b_height]
+
+                if self.t <= 0.5:
+                    # Phase 1: stabilize body - shift weight and lean, leg stays on ground
+                    phase1_t = self.t * 2
+                    self.pos[14][5] = self.Spot.ylr + self.track  # Keep foot at initial y
+                    self.pos[15][5] = 0
+                    self.pos = self.Spot.moving(phase1_t, start_frame_pos, end_frame_pos, self.pos)
+                else:
+                    # Phase 2: raise leg with abduction, body stays at stable pose
+                    phase2_t = (self.t - 0.5) * 2
+                    self.pos[14][5] = self.Spot.ylr + self.track + pee_leg_abduct * phase2_t
+                    self.pos[15][5] = pee_leg_lift * phase2_t
+                    self.pos = self.Spot.moving(1.0, start_frame_pos, end_frame_pos, self.pos)
 
                 if self.stop == False:
                     if self.t < 1:
